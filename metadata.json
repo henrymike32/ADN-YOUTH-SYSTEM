@@ -1,0 +1,6 @@
+{
+  "name": "ADN Youth - Archdiocese of Nyeri Youth Portal",
+  "description": "Comprehensive youth ministry and management system for the Catholic Archdiocese of Nyeri: member registry, deaneries, parishes, sacramental tracking, events check-in, and financial stewardship.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

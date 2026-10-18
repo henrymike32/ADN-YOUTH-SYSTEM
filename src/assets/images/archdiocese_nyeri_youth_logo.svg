@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 820" width="100%" height="100%">
+  <!-- White Background -->
+  <rect width="1000" height="820" fill="#FFFFFF"/>
+
+  <!-- Left Head (Reddish Brown / Maroon) -->
+  <circle cx="265" cy="215" r="58" fill="#8B352A"/>
+
+  <!-- Right Head (Reddish Brown / Maroon) -->
+  <circle cx="735" cy="215" r="58" fill="#8B352A"/>
+
+  <!-- Two Green Figures forming a Heart -->
+  <!-- Left Green Figure -->
+  <path d="M 168 225 
+           C 162 280 200 400 350 515 
+           C 410 560 465 595 500 610 
+           C 480 580 435 520 380 445 
+           C 355 410 355 350 385 305 
+           C 425 250 490 280 495 350
+           C 455 315 365 310 270 420
+           C 210 370 175 300 168 225 Z" 
+        fill="#00D800"/>
+
+  <!-- Right Green Figure -->
+  <path d="M 832 225 
+           C 838 280 800 400 650 515 
+           C 590 560 535 595 500 610 
+           C 520 580 565 520 620 445 
+           C 645 410 645 350 615 305 
+           C 575 250 510 280 505 350
+           C 545 315 635 310 730 420
+           C 790 370 825 300 832 225 Z" 
+        fill="#00D800"/>
+
+  <!-- Connected Bottom Base Curve for seamless solid green hands/body -->
+  <path d="M 168 225
+           C 160 380 280 540 500 610
+           C 720 540 840 380 832 225
+           C 820 320 740 460 635 510
+           C 585 535 540 550 500 550
+           C 460 550 415 535 365 510
+           C 260 460 180 320 168 225 Z"
+        fill="#00D800"/>
+
+  <!-- Upper Inner Heart Curves & Shoulders -->
+  <path d="M 500 550
+           C 430 520 355 440 355 350
+           C 355 275 425 250 475 290
+           C 490 302 497 320 500 340
+           C 503 320 510 302 525 290
+           C 575 250 645 275 645 350
+           C 645 440 570 520 500 550 Z"
+        fill="#FFFFFF"/>
+
+  <!-- Main Unified Green Body (Precision Vector) -->
+  <path d="M 168 225
+           C 162 380 270 535 500 610
+           C 730 535 838 380 832 225
+           C 825 320 740 450 635 490
+           C 580 512 530 520 500 520
+           C 470 520 420 512 365 490
+           C 260 450 175 320 168 225 Z"
+        fill="#00D800"/>
+  
+  <!-- Left Upper Arch Curve -->
+  <path d="M 365 490
+           C 335 430 340 350 380 305
+           C 425 255 488 280 496 348
+           C 485 300 440 275 395 305
+           C 355 335 340 405 365 490 Z"
+        fill="#00D800"/>
+
+  <!-- Right Upper Arch Curve -->
+  <path d="M 635 490
+           C 665 430 660 350 620 305
+           C 575 255 512 280 504 348
+           C 515 300 560 275 605 305
+           C 645 335 660 405 635 490 Z"
+        fill="#00D800"/>
+
+  <!-- Solid Smooth Left Wing/Arm -->
+  <path d="M 168 225
+           C 180 310 240 400 320 460
+           C 250 390 200 310 168 225 Z"
+        fill="#00D800"/>
+
+  <!-- Solid Smooth Right Wing/Arm -->
+  <path d="M 832 225
+           C 820 310 760 400 680 460
+           C 750 390 800 310 832 225 Z"
+        fill="#00D800"/>
+
+  <!-- Green Latin Cross at Center Top -->
+  <g fill="#00D800">
+    <!-- Vertical Cross Post -->
+    <rect x="492" y="265" width="16" height="85" rx="3"/>
+    <!-- Horizontal Cross Beam -->
+    <rect x="478" y="283" width="44" height="15" rx="3"/>
+    <!-- Center Flare -->
+    <circle cx="500" cy="290.5" r="3" fill="#00D800"/>
+  </g>
+
+  <!-- Central Fire Circle (Brown / Maroon) -->
+  <circle cx="500" cy="485" r="60" fill="#8B352A"/>
+
+  <!-- Flame Shape (White Inside Brown Circle with subtle fire gradient) -->
+  <defs>
+    <linearGradient id="fireGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="60%" stop-color="#FFF5EA" />
+      <stop offset="100%" stop-color="#FCE7D2" />
+    </linearGradient>
+  </defs>
+
+  <path d="M 500 535
+           C 475 535 460 515 460 495
+           C 460 472 478 455 490 435
+           C 493 450 498 460 504 460
+           C 510 460 508 442 505 430
+           C 520 445 535 468 535 495
+           C 535 520 520 535 500 535 Z"
+        fill="url(#fireGrad)"/>
+
+  <!-- Inner Flame Detail Tongue -->
+  <path d="M 500 530
+           C 485 530 475 518 475 505
+           C 475 488 488 475 497 458
+           C 499 468 502 474 507 474
+           C 512 474 513 464 511 454
+           C 522 467 525 485 525 505
+           C 525 520 515 530 500 530 Z"
+        fill="#8B352A" opacity="0.3"/>
+
+  <path d="M 500 525
+           C 490 525 482 516 482 506
+           C 482 492 492 480 499 468
+           C 502 476 505 482 509 482
+           C 513 482 513 474 512 466
+           C 519 478 520 492 520 506
+           C 520 518 512 525 500 525 Z"
+        fill="#FFFFFF"/>
+
+  <!-- Typography Line 1: ARCHDIOCESE OF NYERI YOUTH -->
+  <text x="500" y="695" 
+        text-anchor="middle" 
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Plus Jakarta Sans', sans-serif" 
+        font-size="44" 
+        font-weight="900" 
+        letter-spacing="1.5" 
+        fill="#000000">
+    ARCHDIOCESE OF NYERI YOUTH
+  </text>
+
+  <!-- Typography Line 2: F A I T H   O N   F I R E -->
+  <text x="500" y="750" 
+        text-anchor="middle" 
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Plus Jakarta Sans', sans-serif" 
+        font-size="28" 
+        font-weight="700" 
+        letter-spacing="14" 
+        fill="#000000">
+    FAITH ON FIRE
+  </text>
+</svg>
