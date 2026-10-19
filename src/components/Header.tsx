@@ -42,7 +42,7 @@ export const Header: React.FC<HeaderProps> = ({
           {currentTab !== 'main-portal' && (
             <button
               onClick={() => setCurrentTab('main-portal')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-white/15 hover:bg-white/25 rounded-lg transition-colors border border-white/25 backdrop-blur-xs shadow-xs"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-white/15 hover:bg-white/25 rounded-lg transition-colors border border-white/25 backdrop-blur-xs shadow-xs cursor-pointer"
             >
               <Home className="w-3.5 h-3.5 text-white" />
               <span>Main Dashboard</span>
@@ -53,7 +53,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onOpenBackupModal}
             title="System Data & Backups"
-            className="p-2 text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors border border-white/20 backdrop-blur-xs shadow-xs"
+            className="p-2 text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors border border-white/20 backdrop-blur-xs shadow-xs cursor-pointer"
             aria-label="Backup and Data Management"
           >
             <Database className="w-4 h-4" />

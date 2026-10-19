@@ -12,7 +12,9 @@ import {
   ChallengeWeekTeam,
   CareerDayRegistration,
   MatronPatron,
-  SecondarySchoolStudent
+  SecondarySchoolStudent,
+  ParishRegistrationBatch,
+  ParishLeaderAccount
 } from '../types';
 import { 
   SEED_DEANERIES, 
@@ -28,7 +30,9 @@ import {
   SEED_CHALLENGE_WEEK_TEAMS,
   SEED_CAREER_DAY,
   SEED_MATRONS_PATRONS,
-  SEED_SECONDARY_SCHOOL_YOUTH
+  SEED_SECONDARY_SCHOOL_YOUTH,
+  SEED_PARISH_BATCHES,
+  SEED_PARISH_LEADERS
 } from '../data/seedModules';
 
 interface YouthContextType {
@@ -54,6 +58,21 @@ interface YouthContextType {
   careerRegistrations: CareerDayRegistration[];
   matronsPatrons: MatronPatron[];
   secondaryYouth: SecondarySchoolStudent[];
+
+  // Parish Youth Batches & Leaders
+  parishBatches: ParishRegistrationBatch[];
+  parishLeaders: ParishLeaderAccount[];
+  addParishRegistrationBatch: (
+    batchData: Omit<ParishRegistrationBatch, 'id' | 'submittedAt' | 'memberIds' | 'totalFee'>,
+    names: string[]
+  ) => { batch: ParishRegistrationBatch; newMembers: YouthMember[] };
+  confirmParishBatch: (batchId: string, adminName?: string) => void;
+  confirmIndividualMember: (memberId: string, adminName?: string) => void;
+  addMemberToBatch: (
+    batchId: string,
+    member: { fullName: string; phone?: string; age?: number; gender?: 'Male' | 'Female' }
+  ) => YouthMember;
+
   
   // Member actions
   addMember: (member: Omit<YouthMember, 'id'>) => YouthMember;
@@ -81,7 +100,7 @@ interface YouthContextType {
   updateParish: (id: string, updates: Partial<Parish>) => void;
 
   // NICCA
-  addNiccaStudent: (student: Omit<NiccaStudent, 'id' | 'registrationDate'>) => void;
+  addNiccaStudent: (student: Omit<NiccaStudent, 'id' | 'registrationDate'>) => NiccaStudent;
   deleteNiccaStudent: (id: string) => void;
 
   // Challenge Week
@@ -106,7 +125,7 @@ interface YouthContextType {
   resetToSeedData: () => void;
 }
 
-const STORAGE_KEY = 'ADN_YOUTH_MANAGEMENT_DATA_V2';
+const STORAGE_KEY = 'ADN_YOUTH_MANAGEMENT_DATA_V3';
 
 const YouthContext = createContext<YouthContextType | undefined>(undefined);
 
@@ -116,10 +135,15 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed.members) return parsed.members;
+        if (parsed.members) {
+          return parsed.members.map((m: YouthMember) => ({
+            ...m,
+            approvalStatus: m.approvalStatus || 'Confirmed',
+          }));
+        }
       }
     } catch {}
-    return SEED_MEMBERS;
+    return SEED_MEMBERS.map(m => ({ ...m, approvalStatus: m.approvalStatus || 'Confirmed' }));
   });
 
   const [parishes, setParishes] = useState<Parish[]>(() => {
@@ -244,6 +268,28 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return SEED_SECONDARY_SCHOOL_YOUTH;
   });
 
+  const [parishBatches, setParishBatches] = useState<ParishRegistrationBatch[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.parishBatches) return parsed.parishBatches;
+      }
+    } catch {}
+    return SEED_PARISH_BATCHES;
+  });
+
+  const [parishLeaders, setParishLeaders] = useState<ParishLeaderAccount[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.parishLeaders) return parsed.parishLeaders;
+      }
+    } catch {}
+    return SEED_PARISH_LEADERS;
+  });
+
   const [currentRole, setCurrentRole] = useState<UserRole>('Archdiocesan Chaplaincy');
   const [selectedDeaneryId, setSelectedDeaneryId] = useState<string>('ALL');
   const [selectedParishId, setSelectedParishId] = useState<string>('ALL');
@@ -265,6 +311,8 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         careerRegistrations,
         matronsPatrons,
         secondaryYouth,
+        parishBatches,
+        parishLeaders,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToPersist));
     } catch (e) {
@@ -283,6 +331,8 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     careerRegistrations,
     matronsPatrons,
     secondaryYouth,
+    parishBatches,
+    parishLeaders,
   ]);
 
   const addMember = (memberData: Omit<YouthMember, 'id'>): YouthMember => {
@@ -426,14 +476,17 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   // NICCA
-  const addNiccaStudent = (studentData: Omit<NiccaStudent, 'id' | 'registrationDate'>) => {
+  const addNiccaStudent = (studentData: Omit<NiccaStudent, 'id' | 'registrationDate'>): NiccaStudent => {
     const nextNum = niccaStudents.length + 1;
     const newStudent: NiccaStudent = {
       ...studentData,
-      id: `NICCA-2026-${String(nextNum).padStart(3, '0')}`,
+      id: `NICCA-2027-${String(nextNum).padStart(3, '0')}`,
       registrationDate: new Date().toISOString().split('T')[0],
+      amountPaid: studentData.amountPaid !== undefined ? studentData.amountPaid : 100,
+      paymentStatus: studentData.paymentStatus || 'Paid',
     };
     setNiccaStudents(prev => [newStudent, ...prev]);
+    return newStudent;
   };
 
   const deleteNiccaStudent = (id: string) => {
@@ -499,6 +552,191 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setSecondaryYouth(prev => prev.filter(s => s.id !== id));
   };
 
+  // Parish Youth Batches
+  const addParishRegistrationBatch = (
+    batchData: Omit<ParishRegistrationBatch, 'id' | 'submittedAt' | 'memberIds' | 'totalFee'>,
+    names: string[]
+  ): { batch: ParishRegistrationBatch; newMembers: YouthMember[] } => {
+    const batchId = `BATCH-${Date.now()}`;
+    const now = new Date().toISOString().split('T')[0];
+    const count = names.length;
+    const totalFee = count * 100;
+
+    const createdMembers: YouthMember[] = names.map((name, idx) => {
+      const nextNum = members.length + idx + 1;
+      const formattedId = `ADN-PRSH-2026-${String(nextNum).padStart(4, '0')}`;
+      return {
+        id: formattedId,
+        fullName: name.trim(),
+        gender: idx % 2 === 0 ? 'Male' : 'Female',
+        dob: '2004-01-01',
+        age: 21,
+        phone: batchData.leaderPhone,
+        email: `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}@adn-youth.org`,
+        deaneryId: batchData.deaneryId,
+        parishId: batchData.parishId,
+        subParish: batchData.localChurch,
+        movement: 'CYO',
+        occupation: 'Parish Youth Member',
+        sacraments: {
+          baptism: true,
+          firstCommunion: true,
+          confirmation: false,
+          matrimony: false,
+        },
+        ministryGuild: 'Parish Youth Group',
+        leadershipRole: 'Member',
+        emergencyContact: {
+          name: batchData.leaderName,
+          relation: 'Youth Leader',
+          phone: batchData.leaderPhone,
+        },
+        joinedDate: now,
+        status: 'Active',
+        skills: ['Parish Youth'],
+        approvalStatus: 'Pending',
+        registeredByLeaderPhone: batchData.leaderPhone,
+        registeredByLeaderName: batchData.leaderName,
+        localChurch: batchData.localChurch,
+        mpesaRef: batchData.mpesaCode,
+        registrationFee: 100,
+        batchId: batchId,
+      };
+    });
+
+    const newBatch: ParishRegistrationBatch = {
+      ...batchData,
+      id: batchId,
+      memberCount: count,
+      feePerMember: 100,
+      totalFee,
+      approvalStatus: 'Pending',
+      submittedAt: now,
+      memberIds: createdMembers.map((m) => m.id),
+    };
+
+    const newLeader: ParishLeaderAccount = {
+      leaderPhone: batchData.leaderPhone,
+      leaderName: batchData.leaderName,
+      password: batchData.password || 'password123',
+      deaneryName: batchData.deaneryName,
+      parishName: batchData.parishName,
+      localChurch: batchData.localChurch,
+      batchId: batchId,
+    };
+
+    setMembers((prev) => [...createdMembers, ...prev]);
+    setParishBatches((prev) => [newBatch, ...prev]);
+    setParishLeaders((prev) => {
+      const filtered = prev.filter((l) => l.leaderPhone !== batchData.leaderPhone);
+      return [newLeader, ...filtered];
+    });
+
+    return { batch: newBatch, newMembers: createdMembers };
+  };
+
+  const confirmParishBatch = (batchId: string, adminName: string = 'Archdiocesan Youth Chaplaincy') => {
+    const now = new Date().toISOString().split('T')[0];
+    setParishBatches((prev) =>
+      prev.map((b) =>
+        b.id === batchId
+          ? {
+              ...b,
+              approvalStatus: 'Confirmed',
+              paymentStatus: 'Verified',
+              approvedBy: adminName,
+              approvedAt: now,
+            }
+          : b
+      )
+    );
+
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.batchId === batchId
+          ? { ...m, approvalStatus: 'Confirmed' }
+          : m
+      )
+    );
+  };
+
+  const confirmIndividualMember = (memberId: string, adminName: string = 'Archdiocesan Youth Chaplaincy') => {
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.id === memberId
+          ? { ...m, approvalStatus: 'Confirmed' }
+          : m
+      )
+    );
+  };
+
+  const addMemberToBatch = (
+    batchId: string,
+    memberData: { fullName: string; phone?: string; age?: number; gender?: 'Male' | 'Female' }
+  ): YouthMember => {
+    const batch = parishBatches.find((b) => b.id === batchId);
+    const nextNum = members.length + 1;
+    const formattedId = `ADN-PRSH-2026-${String(nextNum).padStart(4, '0')}`;
+    const now = new Date().toISOString().split('T')[0];
+
+    const newMember: YouthMember = {
+      id: formattedId,
+      fullName: memberData.fullName,
+      gender: memberData.gender || 'Male',
+      dob: '2004-01-01',
+      age: memberData.age || 20,
+      phone: memberData.phone || batch?.leaderPhone || '+254 700 000 000',
+      email: `${memberData.fullName.toLowerCase().replace(/[^a-z0-9]/g, '')}@adn-youth.org`,
+      deaneryId: batch?.deaneryId || 'deanery-tetu',
+      parishId: batch?.parishId || 'parish-tetu',
+      subParish: batch?.localChurch || 'Parish Main',
+      movement: 'CYO',
+      occupation: 'Parish Youth Member',
+      sacraments: {
+        baptism: true,
+        firstCommunion: true,
+        confirmation: false,
+        matrimony: false,
+      },
+      ministryGuild: 'Youth Guild',
+      leadershipRole: 'Member',
+      emergencyContact: {
+        name: batch?.leaderName || 'Youth Leader',
+        relation: 'Youth Leader',
+        phone: batch?.leaderPhone || '+254 700 000 000',
+      },
+      joinedDate: now,
+      status: 'Active',
+      skills: ['Parish Youth'],
+      approvalStatus: 'Pending',
+      registeredByLeaderPhone: batch?.leaderPhone,
+      registeredByLeaderName: batch?.leaderName,
+      localChurch: batch?.localChurch,
+      mpesaRef: batch?.mpesaCode || 'ADDON',
+      registrationFee: 100,
+      batchId: batchId,
+    };
+
+    setMembers((prev) => [newMember, ...prev]);
+
+    if (batch) {
+      setParishBatches((prev) =>
+        prev.map((b) =>
+          b.id === batchId
+            ? {
+                ...b,
+                memberCount: b.memberCount + 1,
+                totalFee: (b.memberCount + 1) * 100,
+                memberIds: [...b.memberIds, formattedId],
+              }
+            : b
+        )
+      );
+    }
+
+    return newMember;
+  };
+
   const exportDataJson = (): string => {
     const data = {
       exportedAt: new Date().toISOString(),
@@ -516,6 +754,8 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       careerRegistrations,
       matronsPatrons,
       secondaryYouth,
+      parishBatches,
+      parishLeaders,
     };
     return JSON.stringify(data, null, 2);
   };
@@ -535,6 +775,8 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (parsed.careerRegistrations && Array.isArray(parsed.careerRegistrations)) setCareerRegistrations(parsed.careerRegistrations);
       if (parsed.matronsPatrons && Array.isArray(parsed.matronsPatrons)) setMatronsPatrons(parsed.matronsPatrons);
       if (parsed.secondaryYouth && Array.isArray(parsed.secondaryYouth)) setSecondaryYouth(parsed.secondaryYouth);
+      if (parsed.parishBatches && Array.isArray(parsed.parishBatches)) setParishBatches(parsed.parishBatches);
+      if (parsed.parishLeaders && Array.isArray(parsed.parishLeaders)) setParishLeaders(parsed.parishLeaders);
       return true;
     } catch (e) {
       console.error('Import failed', e);
@@ -543,7 +785,7 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const resetToSeedData = () => {
-    setMembers(SEED_MEMBERS);
+    setMembers(SEED_MEMBERS.map(m => ({ ...m, approvalStatus: m.approvalStatus || 'Confirmed' })));
     setParishes(SEED_PARISHES);
     setDeaneries(SEED_DEANERIES);
     setEvents(SEED_EVENTS);
@@ -555,6 +797,8 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCareerRegistrations(SEED_CAREER_DAY);
     setMatronsPatrons(SEED_MATRONS_PATRONS);
     setSecondaryYouth(SEED_SECONDARY_SCHOOL_YOUTH);
+    setParishBatches(SEED_PARISH_BATCHES);
+    setParishLeaders(SEED_PARISH_LEADERS);
     localStorage.removeItem(STORAGE_KEY);
   };
 
@@ -581,6 +825,12 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         careerRegistrations,
         matronsPatrons,
         secondaryYouth,
+        parishBatches,
+        parishLeaders,
+        addParishRegistrationBatch,
+        confirmParishBatch,
+        confirmIndividualMember,
+        addMemberToBatch,
         addMember,
         updateMember,
         deleteMember,

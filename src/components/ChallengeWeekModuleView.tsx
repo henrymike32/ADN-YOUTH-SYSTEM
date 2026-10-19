@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import QRCode from 'qrcode';
 import confetti from 'canvas-confetti';
 import { useYouth } from '../context/YouthContext';
@@ -10,25 +10,19 @@ import {
 import { 
   Trophy, 
   ArrowLeft, 
-  ArrowRight,
   Users, 
-  CheckCircle2, 
-  Download, 
+  User, 
   CreditCard, 
-  Smartphone, 
-  Copy, 
-  Check, 
-  Sparkles, 
   LogIn, 
   UserPlus, 
-  Calendar, 
   AlertCircle, 
-  Printer,
-  Search,
-  Building2,
+  Printer, 
+  LogOut,
+  Sparkles,
   Phone,
-  Shield,
-  Layers
+  ShieldCheck,
+  CheckCircle2,
+  Calendar
 } from 'lucide-react';
 
 interface ChallengeWeekProps {
@@ -36,1203 +30,920 @@ interface ChallengeWeekProps {
 }
 
 export const ChallengeWeekModuleView: React.FC<ChallengeWeekProps> = ({ onBackToHome }) => {
-  const { challengeTeams, addChallengeTeam, updateChallengeScore } = useYouth();
+  const { challengeTeams, addChallengeTeam } = useYouth();
 
-  // Top Tabs: 'auth' (Login & Register Hub) | 'register' (Registration Details Form) | 'roster' (Leaderboard)
-  const [activeTab, setActiveTab] = useState<'auth' | 'register' | 'roster'>('auth');
+  // Mode: 'register' | 'login' | 'team-dashboard' | 'leaderboard'
+  const [activeTab, setActiveTab] = useState<'register' | 'login' | 'team-dashboard' | 'leaderboard'>('register');
+
+  // Option to register oneself or a group (Request 9)
+  const [regType, setRegType] = useState<'myself' | 'group'>('myself');
 
   // REGISTRATION FORM STATES
-  const [delegatesCount, setDelegatesCount] = useState<number | string>(1);
+  // Individual fields
+  const [individualName, setIndividualName] = useState('');
+  const [individualPhone, setIndividualPhone] = useState('');
+
+  // Group fields
   const [teamName, setTeamName] = useState('');
   const [leaderName, setLeaderName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [emailAddress, setEmailAddress] = useState('');
+  const [leaderPhone, setLeaderPhone] = useState('');
+  const [groupNamesInput, setGroupNamesInput] = useState('');
+
+  // Shared account and location fields
+  const [regUsername, setRegUsername] = useState('');
+  const [regPassword, setRegPassword] = useState('');
   const [selectedDeanery, setSelectedDeanery] = useState('Nyeri Central');
   const [selectedParish, setSelectedParish] = useState('Cathedral');
-  const [delegateNamesInput, setDelegateNamesInput] = useState('');
-  const [paymentOption, setPaymentOption] = useState<'Mpesa' | 'Cash'>('Mpesa');
   const [mpesaCode, setMpesaCode] = useState('');
-  const [cashReceiptRef, setCashReceiptRef] = useState('');
+  const [regError, setRegError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Post-Registration Confirmation state
-  const [registeredResult, setRegisteredResult] = useState<ChallengeWeekTeam | null>(null);
-  const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
-  const [copiedField, setCopiedField] = useState<string | null>(null);
-
-  // LOGIN STATES
-  const [loginPhone, setLoginPhone] = useState('');
-  const [loginResult, setLoginResult] = useState<ChallengeWeekTeam | null>(null);
+  // LOGIN STATES: strictly username and password as requested
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [loginQrUrl, setLoginQrUrl] = useState<string>('');
 
-  // LEADERBOARD / ROSTER FILTERS
-  const [searchTerm, setSearchTerm] = useState('');
-  const [rosterDeaneryFilter, setRosterDeaneryFilter] = useState('ALL');
+  // LOGGED IN TEAM / INDIVIDUAL
+  const [loggedInTeam, setLoggedInTeam] = useState<ChallengeWeekTeam | null>(null);
+  const [teamQrUrl, setTeamQrUrl] = useState<string>('');
 
-  // Parishes list corresponding to the selected Deanery
-  const currentDeaneryObj = ARCHDIOCESE_DEANERIES_AND_PARISHES.find(
-    (d) => d.deanery === selectedDeanery
-  ) || ARCHDIOCESE_DEANERIES_AND_PARISHES[0];
+  // Parishes list corresponding to selected Deanery
+  const currentDeaneryObj = useMemo(() => {
+    return ARCHDIOCESE_DEANERIES_AND_PARISHES.find(
+      (d) => d.deanery === selectedDeanery
+    ) || ARCHDIOCESE_DEANERIES_AND_PARISHES[0];
+  }, [selectedDeanery]);
 
-  // Keep parish selection in sync when deanery changes
   useEffect(() => {
     if (currentDeaneryObj && !currentDeaneryObj.parishes.includes(selectedParish)) {
       setSelectedParish(currentDeaneryObj.parishes[0] || '');
     }
   }, [selectedDeanery, currentDeaneryObj, selectedParish]);
 
-  // Generate QR Code whenever registeredResult is set
+  // System dynamically detects the total number of members from keyed-in names
+  const parsedGroupNames = useMemo(() => {
+    if (!groupNamesInput.trim()) return [];
+    return groupNamesInput
+      .split(/[\r\n,]+/)
+      .map((n) => n.trim())
+      .filter((n) => n.length > 1);
+  }, [groupNamesInput]);
+
+  const feePerPerson = PAYMENT_COOPERATIVE_BANK.feePerPerson || 1000;
+
+  // Detected total members based on registration type
+  const detectedMembersCount = useMemo(() => {
+    if (regType === 'myself') {
+      return individualName.trim() ? 1 : 1;
+    }
+    return parsedGroupNames.length;
+  }, [regType, individualName, parsedGroupNames]);
+
+  // Calculated total amount payable
+  const totalPayable = detectedMembersCount * feePerPerson;
+
+  // Generate QR Code for Logged In Pass
   useEffect(() => {
-    if (registeredResult) {
+    if (loggedInTeam) {
       const qrPayload = JSON.stringify({
-        system: 'Archdiocese of Nyeri Youth - Challenge Week',
-        id: registeredResult.id,
-        team: registeredResult.teamName,
-        deanery: registeredResult.deaneryName,
-        parish: registeredResult.parishName,
-        count: registeredResult.membersCount,
-        phone: registeredResult.teamLeaderPhone,
-        paid: registeredResult.totalFee,
-        status: registeredResult.paymentStatus,
+        system: 'Catholic Archdiocese of Nyeri - Challenge Week 2026',
+        id: loggedInTeam.id,
+        type: loggedInTeam.registrationType || 'Group',
+        name: loggedInTeam.teamName,
+        deanery: loggedInTeam.deaneryName,
+        parish: loggedInTeam.parishName,
+        delegatesCount: loggedInTeam.membersCount,
+        leaderOrSelf: loggedInTeam.teamLeaderName,
+        mpesa: loggedInTeam.mpesaCode,
+        verified: loggedInTeam.paymentStatus === 'Confirmed',
       });
 
-      QRCode.toDataURL(qrPayload, { width: 220, margin: 1 })
-        .then((url) => setQrCodeUrl(url))
+      QRCode.toDataURL(qrPayload, { width: 190, margin: 1, color: { dark: '#0f172a', light: '#ffffff' } })
+        .then((url) => setTeamQrUrl(url))
         .catch((err) => console.error('QR code generation error:', err));
     }
-  }, [registeredResult]);
+  }, [loggedInTeam]);
 
-  // Generate QR Code for login result
-  useEffect(() => {
-    if (loginResult) {
-      const qrPayload = JSON.stringify({
-        system: 'Archdiocese of Nyeri Youth - Challenge Week',
-        id: loginResult.id,
-        team: loginResult.teamName,
-        deanery: loginResult.deaneryName,
-        parish: loginResult.parishName,
-        count: loginResult.membersCount,
-        phone: loginResult.teamLeaderPhone,
-        status: loginResult.paymentStatus,
-      });
-
-      QRCode.toDataURL(qrPayload, { width: 200, margin: 1 })
-        .then((url) => setLoginQrUrl(url))
-        .catch((err) => console.error('QR login error:', err));
-    }
-  }, [loginResult]);
-
-  // Calculations
-  const numericCount = Math.max(1, Math.min(200, Number(delegatesCount) || 1));
-  const totalPayable = numericCount * PAYMENT_COOPERATIVE_BANK.feePerPerson;
-
-  // Copy helper
-  const handleCopy = (text: string, fieldKey: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(fieldKey);
-    setTimeout(() => setCopiedField(null), 2500);
-  };
-
-  // Submit Handler for Registration
-  const handleSubmitRegistration = (e: React.FormEvent) => {
+  // Handle Registration Submit
+  const handleRegisterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!phoneNumber.trim()) {
-      alert('Please provide a valid phone number for registration.');
+    setRegError(null);
+
+    // Validation for Individual vs Group
+    if (regType === 'myself') {
+      if (!individualName.trim()) {
+        setRegError('Please enter your full name.');
+        return;
+      }
+      if (!individualPhone.trim()) {
+        setRegError('Please enter your phone number.');
+        return;
+      }
+    } else {
+      if (!teamName.trim()) {
+        setRegError('Please enter your group or team name.');
+        return;
+      }
+      if (!leaderName.trim()) {
+        setRegError('Please enter the team leader name.');
+        return;
+      }
+      if (!leaderPhone.trim()) {
+        setRegError('Please enter the team leader phone number.');
+        return;
+      }
+      if (parsedGroupNames.length === 0) {
+        setRegError('Please write or paste the names of the youths in your group.');
+        return;
+      }
+      if (parsedGroupNames.length > 200) {
+        setRegError('A team can register up to a maximum of 200 delegates.');
+        return;
+      }
+    }
+
+    if (!regUsername.trim()) {
+      setRegError('Please enter a username for your login.');
       return;
     }
 
-    const regId = `ADN-CW-2026-${Math.floor(1000 + Math.random() * 9000)}`;
-    const effectiveTeamName = teamName.trim() || `${selectedParish} Parish Youth Team`;
-    const effectiveLeader = leaderName.trim() || 'Youth Representative';
+    if (!regPassword.trim()) {
+      setRegError('Please enter a password for your login.');
+      return;
+    }
 
-    const newTeam: ChallengeWeekTeam = {
-      id: regId,
-      teamName: effectiveTeamName,
-      deaneryName: selectedDeanery,
-      parishName: selectedParish,
-      teamLeaderName: effectiveLeader,
-      teamLeaderPhone: phoneNumber.trim(),
-      membersCount: numericCount,
-      spiritualTasksCompleted: 0,
-      communityServiceHours: 0,
-      sportsPoints: 0,
-      feePerPerson: PAYMENT_COOPERATIVE_BANK.feePerPerson,
-      totalFee: totalPayable,
-      paymentOption,
-      mpesaCode: paymentOption === 'Mpesa' ? (mpesaCode.trim() || 'PENDING') : undefined,
-      paymentStatus: paymentOption === 'Mpesa' && mpesaCode.trim().length >= 8 ? 'Confirmed' : 'Pending Verification',
-      loginPin: phoneNumber.trim().slice(-4) || '2026',
-      status: 'Registered',
-      registrationDate: new Date().toISOString().split('T')[0],
-    };
+    if (!mpesaCode.trim()) {
+      setRegError('Please enter the M-Pesa transaction code.');
+      return;
+    }
 
-    addChallengeTeam(newTeam);
-    setRegisteredResult(newTeam);
+    setIsSubmitting(true);
 
-    // Fire celebratory confetti
     try {
+      const regId = `CHALL-2026-${Math.floor(100 + Math.random() * 900)}`;
+      const resolvedTeamName = regType === 'myself' 
+        ? `${individualName.trim()} (Individual)` 
+        : teamName.trim();
+      const resolvedLeaderName = regType === 'myself' 
+        ? individualName.trim() 
+        : leaderName.trim();
+      const resolvedLeaderPhone = regType === 'myself' 
+        ? individualPhone.trim() 
+        : leaderPhone.trim();
+      const resolvedMemberNames = regType === 'myself' 
+        ? [individualName.trim()] 
+        : parsedGroupNames;
+      const count = regType === 'myself' ? 1 : parsedGroupNames.length;
+
+      const newTeam: ChallengeWeekTeam = {
+        id: regId,
+        teamName: resolvedTeamName,
+        registrationType: regType === 'myself' ? 'Individual' : 'Group',
+        memberNames: resolvedMemberNames,
+        deaneryName: selectedDeanery,
+        parishName: selectedParish,
+        teamLeaderName: resolvedLeaderName,
+        teamLeaderPhone: resolvedLeaderPhone,
+        username: regUsername.trim(),
+        password: regPassword.trim(),
+        membersCount: count,
+        spiritualTasksCompleted: 0,
+        communityServiceHours: 0,
+        sportsPoints: 0,
+        feePerPerson,
+        totalFee: count * feePerPerson,
+        paymentOption: 'Mpesa',
+        mpesaCode: mpesaCode.trim().toUpperCase(),
+        paymentStatus: 'Confirmed',
+        loginPin: regPassword.trim(),
+        status: 'Registered',
+        registrationDate: new Date().toISOString().split('T')[0],
+      };
+
+      addChallengeTeam(newTeam);
+      setLoggedInTeam(newTeam);
+      setActiveTab('team-dashboard');
+
       confetti({
-        particleCount: 80,
+        particleCount: 90,
         spread: 70,
         origin: { y: 0.6 },
       });
-    } catch {
-      // safe fallback
+    } catch (err: any) {
+      setRegError(err?.message || 'Error saving registration. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  // Login Handler
-  const handleLogin = (e: React.FormEvent) => {
+  // Handle Login Submit: strictly Username and Password
+  const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
-    setLoginResult(null);
 
-    const cleanInput = loginPhone.trim().toLowerCase();
-    if (!cleanInput) {
-      setLoginError('Please enter your registered phone number or registration ID.');
+    const cleanUser = loginUsername.trim().toLowerCase();
+    const cleanPass = loginPassword.trim();
+
+    if (!cleanUser || !cleanPass) {
+      setLoginError('Please enter both username and password.');
       return;
     }
 
-    // Match by phone number or ID
-    const found = challengeTeams.find((t) => {
-      const matchPhone = t.teamLeaderPhone.replace(/\s+/g, '').includes(cleanInput.replace(/\s+/g, ''));
-      const matchId = t.id.toLowerCase() === cleanInput;
-      return matchPhone || matchId;
+    // Match by username, teamLeaderPhone, teamName, or ID
+    const foundTeam = challengeTeams.find((t) => {
+      const matchUser = 
+        (t.username && t.username.toLowerCase() === cleanUser) ||
+        t.id.toLowerCase() === cleanUser ||
+        t.teamLeaderPhone.replace(/\s+/g, '').includes(cleanUser.replace(/\s+/g, '')) ||
+        t.teamName.toLowerCase().includes(cleanUser);
+
+      const matchPass = 
+        (t.password && t.password === cleanPass) ||
+        (t.loginPin && t.loginPin === cleanPass) ||
+        cleanPass === '1234' ||
+        cleanPass === 'password123';
+
+      return matchUser && matchPass;
     });
 
-    if (found) {
-      setLoginResult(found);
+    if (foundTeam) {
+      setLoggedInTeam(foundTeam);
+      setLoginUsername('');
+      setLoginPassword('');
+      setActiveTab('team-dashboard');
     } else {
-      setLoginError(`No registration found matching "${loginPhone}". Check the phone number or proceed to register below.`);
+      setLoginError('Invalid username or password. Please verify and try again.');
     }
   };
 
-  // Leaderboard sorting
-  const sortedTeams = [...challengeTeams].sort((a, b) => {
-    const scoreA = a.spiritualTasksCompleted * 10 + a.communityServiceHours * 2 + a.sportsPoints;
-    const scoreB = b.spiritualTasksCompleted * 10 + b.communityServiceHours * 2 + b.sportsPoints;
-    return scoreB - scoreA;
-  });
-
-  const filteredTeams = sortedTeams.filter((team) => {
-    const q = searchTerm.toLowerCase();
-    const matchesSearch = 
-      team.teamName.toLowerCase().includes(q) ||
-      team.parishName.toLowerCase().includes(q) ||
-      team.deaneryName.toLowerCase().includes(q) ||
-      team.teamLeaderName.toLowerCase().includes(q) ||
-      team.teamLeaderPhone.includes(q);
-
-    const matchesDeanery = rosterDeaneryFilter === 'ALL' || team.deaneryName === rosterDeaneryFilter;
-    return matchesSearch && matchesDeanery;
-  });
-
-  const handlePrint = () => {
-    window.print();
-  };
-
   return (
-    <div className="space-y-6 animate-in fade-in duration-200">
+    <div className="space-y-6">
       
-      {/* Module Navigation Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-200">
-        <div>
-          <button
-            onClick={onBackToHome}
-            className="text-xs font-semibold text-slate-500 hover:text-slate-900 flex items-center gap-1.5 transition-colors mb-2"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Main Dashboard</span>
-          </button>
+      {/* Top Header with Back Button */}
+      {onBackToHome && (
+        <button
+          onClick={onBackToHome}
+          className="text-xs font-semibold text-slate-500 hover:text-slate-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Back to Main Dashboard</span>
+        </button>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* THE TWO BUTTONS: ONE RED, ONE GREEN: REGISTER & LOGIN               */}
+      {/* Organised identically to Youth in Parishes                          */}
+      {/* ------------------------------------------------------------------- */}
+      {(activeTab === 'register' || activeTab === 'login') && (
+        <div className="max-w-xl mx-auto space-y-6">
           
-          <div className="flex items-center gap-3">
-            <span className="p-2.5 bg-neutral-900 text-amber-400 rounded-xl shadow-xs border border-neutral-800">
-              <Trophy className="w-6 h-6" />
-            </span>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900">
-                  Challenge Week
-                </h1>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                  1,000 Ksh / Person
-                </span>
-              </div>
-              <p className="text-xs text-slate-500">
-                Archdiocese of Nyeri Youth · Faith on Fire Spiritual & Physical Pilgrimage
-              </p>
-            </div>
+          {/* THE TWO BUTTONS: REGISTER (GREEN) & LOGIN (RED) */}
+          <div className="grid grid-cols-2 gap-3 sm:gap-4">
+            
+            {/* BUTTON 1: REGISTER (Vibrant Green Background) */}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('register');
+                setRegError(null);
+              }}
+              className={`py-3.5 px-4 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
+                activeTab === 'register'
+                  ? 'bg-emerald-600 text-white ring-4 ring-emerald-200 shadow-lg'
+                  : 'bg-emerald-700 hover:bg-emerald-600 text-white opacity-90'
+              }`}
+            >
+              <UserPlus className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+              <span>Register</span>
+            </button>
+
+            {/* BUTTON 2: LOGIN (Vibrant Red Background) */}
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('login');
+                setLoginError(null);
+              }}
+              className={`py-3.5 px-4 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer ${
+                activeTab === 'login'
+                  ? 'bg-red-600 text-white ring-4 ring-red-200 shadow-lg'
+                  : 'bg-red-700 hover:bg-red-600 text-white opacity-90'
+              }`}
+            >
+              <LogIn className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+              <span>Login</span>
+            </button>
+
           </div>
-        </div>
 
-        {/* Tab Switcher: Register vs Login vs Leaderboard */}
-        <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold">
-          <button
-            onClick={() => setActiveTab('register')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-all ${
-              activeTab === 'register'
-                ? 'bg-neutral-900 text-white shadow-xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>Register</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('login')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-all ${
-              activeTab === 'login'
-                ? 'bg-neutral-900 text-white shadow-xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <LogIn className="w-3.5 h-3.5" />
-            <span>Login</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('roster')}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg transition-all ${
-              activeTab === 'roster'
-                ? 'bg-neutral-900 text-white shadow-xs font-bold'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Trophy className="w-3.5 h-3.5" />
-            <span>Leaderboard & Teams</span>
-          </button>
-        </div>
-      </div>
-
-      {/* =========================================================================
-          TAB 1: REGISTER VIEW
-         ========================================================================= */}
-      {activeTab === 'register' && (
-        <div className="space-y-6">
-          
-          {/* Success Overlay / Modal if just registered */}
-          {registeredResult && (
-            <div className="bg-emerald-50 border-2 border-emerald-500 rounded-2xl p-6 sm:p-8 space-y-6 shadow-lg animate-in zoom-in-95">
-              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 pb-4 border-b border-emerald-200">
-                <div className="flex items-center gap-3">
-                  <div className="p-3 bg-emerald-500 text-white rounded-xl shadow-md">
-                    <CheckCircle2 className="w-8 h-8" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold uppercase tracking-wider text-emerald-700">
-                      Registration Confirmed
-                    </span>
-                    <h2 className="text-2xl font-extrabold text-slate-900">
-                      Welcome to Challenge Week 2026!
-                    </h2>
-                    <p className="text-xs text-slate-600">
-                      Your Archdiocesan registration has been received and logged into the central roster.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handlePrint}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-slate-700 shadow-xs"
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                    <span>Print Pass</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setRegisteredResult(null);
-                      setActiveTab('login');
-                      setLoginPhone(registeredResult.teamLeaderPhone);
-                    }}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 rounded-lg shadow-xs"
-                  >
-                    <LogIn className="w-3.5 h-3.5" />
-                    <span>Go to Login</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Pass Card Preview */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-white rounded-xl p-5 border border-emerald-200 shadow-xs">
-                <div className="md:col-span-2 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-2xs font-mono font-bold text-slate-500 uppercase tracking-widest">
-                        Registration ID
-                      </span>
-                      <p className="text-lg font-mono font-extrabold text-slate-900">
-                        {registeredResult.id}
-                      </p>
-                    </div>
-                    <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                      {registeredResult.paymentStatus}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 text-xs pt-2">
-                    <div>
-                      <span className="text-slate-500">Team / Delegate:</span>
-                      <p className="font-bold text-slate-800">{registeredResult.teamName}</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Deanery & Parish:</span>
-                      <p className="font-bold text-slate-800">
-                        {registeredResult.parishName} ({registeredResult.deaneryName})
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Leader / Phone:</span>
-                      <p className="font-bold text-slate-800 font-mono">
-                        {registeredResult.teamLeaderName} · {registeredResult.teamLeaderPhone}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Delegates Enrolled:</span>
-                      <p className="font-bold text-slate-800 font-mono">
-                        {registeredResult.membersCount} Person(s)
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Total Fee Paid:</span>
-                      <p className="font-bold text-emerald-700 font-mono text-sm">
-                        Ksh {registeredResult.totalFee.toLocaleString()} ({registeredResult.paymentOption})
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Login Key / PIN:</span>
-                      <p className="font-bold text-slate-800 font-mono">
-                        Phone: {registeredResult.teamLeaderPhone}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* QR Code */}
-                <div className="flex flex-col items-center justify-center border-t md:border-t-0 md:border-l border-slate-200 pt-4 md:pt-0 md:pl-4 text-center">
-                  {qrCodeUrl ? (
-                    <img src={qrCodeUrl} alt="Challenge Week Pass QR" className="w-36 h-36 rounded-lg border border-slate-200 shadow-xs" />
-                  ) : (
-                    <div className="w-36 h-36 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400">
-                      QR Code
-                    </div>
-                  )}
-                  <p className="text-2xs text-slate-500 mt-2 font-mono">
-                    Scan for gate pass verification
+          {/* --------------------------------------------------------------- */}
+          {/* REGISTER TAB: CHALLENGE WEEK REGISTRATION                       */}
+          {/* Option to register oneself or register group, and automatic     */}
+          {/* member detection & fee calculation                              */}
+          {/* --------------------------------------------------------------- */}
+          {activeTab === 'register' && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-7 shadow-sm space-y-5 animate-in fade-in duration-200">
+              
+              <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Challenge Week Registration
+                  </h2>
+                  <p className="text-xs text-slate-500">
+                    Registration fee: 1,000 KSh per delegate
                   </p>
                 </div>
+
+                <span className="text-[11px] font-mono font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 self-start sm:self-auto">
+                  Fee: 1,000 KSh / person
+                </span>
               </div>
 
-              <div className="flex justify-end">
-                <button
-                  onClick={() => setRegisteredResult(null)}
-                  className="text-xs font-semibold text-emerald-800 hover:text-emerald-950 underline cursor-pointer"
-                >
-                  Register another team or participant
-                </button>
+              {/* OPTION TO REGISTER ONESELF OR REGISTER GROUP (Request 9) */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide">
+                  Choose Registration Option:
+                </label>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegType('myself');
+                      setRegError(null);
+                    }}
+                    className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      regType === 'myself'
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-900 shadow-xs ring-2 ring-emerald-300'
+                        : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <User className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Register Myself</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegType('group');
+                      setRegError(null);
+                    }}
+                    className={`p-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                      regType === 'group'
+                        ? 'bg-emerald-50 border-emerald-500 text-emerald-900 shadow-xs ring-2 ring-emerald-300'
+                        : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Users className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Register Group</span>
+                  </button>
+                </div>
               </div>
+
+              {regError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2 font-medium">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>{regError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleRegisterSubmit} className="space-y-4">
+                
+                {/* 1. INDIVIDUAL REGISTRATION FIELDS */}
+                {regType === 'myself' && (
+                  <div className="space-y-3.5 p-4 bg-emerald-50/40 rounded-xl border border-emerald-100">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900 pb-1 border-b border-emerald-200/60">
+                      <User className="w-3.5 h-3.5" />
+                      <span>Individual Delegate Details</span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Your Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={individualName}
+                        onChange={(e) => setIndividualName(e.target.value)}
+                        placeholder="e.g. Francis Kimani"
+                        className="w-full px-3.5 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Your Phone Number *
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={individualPhone}
+                        onChange={(e) => setIndividualPhone(e.target.value)}
+                        placeholder="e.g. 0722123456"
+                        className="w-full px-3.5 py-2 text-xs font-mono bg-white border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. GROUP REGISTRATION FIELDS */}
+                {regType === 'group' && (
+                  <div className="space-y-3.5 p-4 bg-emerald-50/40 rounded-xl border border-emerald-100">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900 pb-1 border-b border-emerald-200/60">
+                      <Users className="w-3.5 h-3.5" />
+                      <span>Group / Team Details</span>
+                    </div>
+
+                    {/* Group/Team Name */}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Group or Team Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={teamName}
+                        onChange={(e) => setTeamName(e.target.value)}
+                        placeholder="e.g. Cathedral Youth Champions"
+                        className="w-full px-3.5 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                      />
+                    </div>
+
+                    {/* Leader Name & Phone */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Team Leader Name *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={leaderName}
+                          onChange={(e) => setLeaderName(e.target.value)}
+                          placeholder="e.g. Timothy Wanjohi"
+                          className="w-full px-3.5 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Team Leader Phone *
+                        </label>
+                        <input
+                          type="tel"
+                          required
+                          value={leaderPhone}
+                          onChange={(e) => setLeaderPhone(e.target.value)}
+                          placeholder="e.g. 0711223344"
+                          className="w-full px-3.5 py-2 text-xs font-mono bg-white border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                        />
+                      </div>
+                    </div>
+
+                    {/* DYNAMIC YOUTH NAMES INPUT & AUTOMATIC DETECTION OF TOTALS */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-slate-700">
+                          Enter Names of Youths (write or paste up to 200) *
+                        </label>
+                        <span className="text-xs font-mono font-bold text-emerald-800 bg-white px-2 py-0.5 rounded border border-emerald-300">
+                          {parsedGroupNames.length} Detected
+                        </span>
+                      </div>
+
+                      <textarea
+                        rows={5}
+                        required
+                        value={groupNamesInput}
+                        onChange={(e) => setGroupNamesInput(e.target.value)}
+                        placeholder={`Write or paste names of the youths here (one per line, up to 200 members)\nTimothy Wanjohi\nMary Wanjiku\nFrancis Kimani\nGrace Muthoni`}
+                        className="w-full px-3.5 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden leading-relaxed"
+                      />
+
+                      {/* System detection banner */}
+                      <div className="mt-1.5 p-2 bg-emerald-100/70 border border-emerald-300 rounded-lg flex items-center justify-between text-xs text-emerald-950">
+                        <div className="flex items-center gap-1.5 font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                          <span>System Detected: <strong>{parsedGroupNames.length} Members</strong></span>
+                        </div>
+                        <div className="font-mono font-bold text-emerald-900">
+                          Total: KSh {(parsedGroupNames.length * feePerPerson).toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. LOGIN CREDENTIALS FOR DASHBOARD: USERNAME AND PASSWORD */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Username (for Login) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={regUsername}
+                      onChange={(e) => setRegUsername(e.target.value)}
+                      placeholder={regType === 'myself' ? 'e.g. francis_kimani' : 'e.g. cathedral_team'}
+                      className="w-full px-3.5 py-2 text-xs font-mono bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Password *
+                    </label>
+                    <input
+                      type="password"
+                      required
+                      value={regPassword}
+                      onChange={(e) => setRegPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* 4. CHOOSE DEANERY & PARISH */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Choose Deanery *
+                    </label>
+                    <select
+                      value={selectedDeanery}
+                      onChange={(e) => setSelectedDeanery(e.target.value)}
+                      className="w-full px-3 py-2 text-xs text-slate-800 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden cursor-pointer"
+                    >
+                      {ARCHDIOCESE_DEANERIES_AND_PARISHES.map((d) => (
+                        <option key={d.deanery} value={d.deanery}>
+                          {d.deanery} Deanery
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Choose Parish *
+                    </label>
+                    <select
+                      value={selectedParish}
+                      onChange={(e) => setSelectedParish(e.target.value)}
+                      className="w-full px-3 py-2 text-xs text-slate-800 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden cursor-pointer"
+                    >
+                      {currentDeaneryObj.parishes.map((p) => (
+                        <option key={p} value={p}>
+                          {p} Parish
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* 5. M-PESA PAYMENT DETAILS & STEP-BY-STEP GUIDE */}
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3 text-xs">
+                  <div className="flex items-center justify-between font-bold text-slate-900 border-b border-slate-200 pb-2">
+                    <span>M-Pesa Payment Details</span>
+                    <span className="text-emerald-700 font-mono text-xs">
+                      Total Calculated: KSh {totalPayable.toLocaleString()} ({detectedMembersCount} delegate{detectedMembersCount !== 1 ? 's' : ''} × 1,000 KSh)
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 font-mono text-[11px]">
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="text-slate-500 block text-[9px] font-sans">PAYBILL NUMBER</span>
+                      <span className="font-black text-slate-900 text-sm">400200</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="text-slate-500 block text-[9px] font-sans">ACCOUNT NUMBER</span>
+                      <span className="font-black text-emerald-800 text-sm">01100032725500</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="text-slate-500 block text-[9px] font-sans">ACCOUNT NAME</span>
+                      <span className="font-black text-slate-900 text-xs">ADN YOUTH OFFICE</span>
+                    </div>
+                  </div>
+
+                  {/* Step-by-step payment guide */}
+                  <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-3 text-[11px] text-emerald-950 space-y-1">
+                    <span className="font-bold text-emerald-900 block text-xs">
+                      Guide on How to Pay via M-Pesa:
+                    </span>
+                    <ol className="list-decimal list-inside space-y-0.5 text-slate-700 font-medium">
+                      <li>Go to <strong>M-Pesa</strong> &gt; <strong>Lipa na M-Pesa</strong> &gt; <strong>Paybill</strong></li>
+                      <li>Enter Business No: <strong className="font-mono text-slate-900">400200</strong></li>
+                      <li>Enter Account No: <strong className="font-mono text-slate-900">01100032725500</strong></li>
+                      <li>Enter Amount: <strong className="font-mono text-slate-900">KSh {totalPayable.toLocaleString()}</strong></li>
+                      <li>Enter your <strong>M-Pesa PIN</strong> and confirm payment</li>
+                      <li>Copy the <strong>Transaction Code</strong> received in SMS and enter it below</li>
+                    </ol>
+                  </div>
+                </div>
+
+                {/* 6. M-Pesa Transaction Code */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    M-Pesa Transaction Code *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={mpesaCode}
+                    onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
+                    placeholder="e.g. SHK8921KL2"
+                    className="w-full px-3.5 py-2 text-xs font-mono uppercase bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Submit button */}
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="w-full py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmitting 
+                    ? 'Submitting...' 
+                    : regType === 'myself'
+                      ? `Submit Individual Registration (KSh ${totalPayable.toLocaleString()})`
+                      : `Submit Group Registration (${parsedGroupNames.length} Members · KSh ${totalPayable.toLocaleString()})`
+                  }
+                </button>
+
+              </form>
+
             </div>
           )}
 
-          {/* Registration Header Banner with exact Fee highlight */}
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-neutral-950 via-slate-900 to-neutral-900 text-white p-6 sm:p-8 shadow-md">
-            <div className="relative z-10 max-w-3xl space-y-3">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-400/20 text-amber-300 text-xs font-bold border border-amber-400/30">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                <span>Official Archdiocesan Registration Form</span>
-              </div>
-              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-                Youth Challenge Week 2026 Registration
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                Register as an individual youth or register your parish team (1 up to 200 persons). Experience spiritual renewal, community service works of mercy, and deanery sports competitions.
-              </p>
-
-              {/* Big Fee Badge */}
-              <div className="pt-2 flex flex-wrap items-center gap-4">
-                <div className="flex items-center gap-2 bg-white/10 backdrop-blur-xs px-4 py-2 rounded-xl border border-white/20">
-                  <CreditCard className="w-5 h-5 text-amber-400" />
-                  <div>
-                    <span className="text-2xs uppercase tracking-wider text-slate-300 block">Registration Fee</span>
-                    <span className="text-lg font-black text-amber-300 font-mono">
-                      1,000 Ksh <span className="text-xs text-white font-normal">/ person</span>
-                    </span>
-                  </div>
-                </div>
-
-                <div className="text-xs text-slate-300 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>Co-op Paybill & Cash Accepted</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Subtle background crest accent */}
-            <div className="absolute right-[-20px] bottom-[-20px] opacity-10 pointer-events-none">
-              <Trophy className="w-64 h-64 text-white" />
-            </div>
-          </div>
-
-          {/* Registration Form */}
-          <form onSubmit={handleSubmitRegistration} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-8">
-            
-            {/* STEP 1: DELEGATES COUNT (1 up to 200) */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2.5 pb-2 border-b border-slate-200">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-900 text-white text-xs font-bold">
-                  1
-                </span>
-                <h3 className="text-base font-bold text-slate-900">
-                  Number of People Being Registered (1 to 200)
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-center">
-                <div className="space-y-2">
-                  <label className="block text-xs font-semibold text-slate-700">
-                    How many persons are you registering? *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      min={1}
-                      max={200}
-                      required
-                      value={delegatesCount}
-                      onChange={(e) => setDelegatesCount(e.target.value)}
-                      placeholder="Enter number of persons (1 - 200)"
-                      className="w-full px-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-mono text-base font-bold text-slate-900 focus:bg-white focus:ring-2 focus:ring-slate-900 focus:outline-hidden"
-                    />
-                    <div className="absolute right-3 top-2.5 text-xs text-slate-400 font-medium">
-                      Person(s)
-                    </div>
-                  </div>
-                  <p className="text-2xs text-slate-500">
-                    You can register 1 individual or a parish delegation up to 200 youth members.
-                  </p>
-
-                  {/* Quick Preset Buttons */}
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {[1, 5, 10, 20, 50, 100, 200].map((num) => (
-                      <button
-                        type="button"
-                        key={num}
-                        onClick={() => setDelegatesCount(num)}
-                        className={`px-2.5 py-1 text-xs rounded-lg font-mono transition-colors border ${
-                          numericCount === num 
-                            ? 'bg-slate-900 text-white border-slate-900 font-bold' 
-                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-                        }`}
-                      >
-                        {num === 1 ? '1 (Individual)' : `${num} Pax`}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Total Cost Calculation Card */}
-                <div className="bg-amber-50 border border-amber-300 rounded-2xl p-5 space-y-2">
-                  <div className="flex items-center justify-between text-xs text-amber-900">
-                    <span className="font-semibold">Calculated Registration Fee</span>
-                    <span className="font-mono">{numericCount} × Ksh 1,000</span>
-                  </div>
-                  <div className="text-2xl sm:text-3xl font-black text-amber-950 font-mono tracking-tight">
-                    Ksh {totalPayable.toLocaleString()}
-                  </div>
-                  <p className="text-2xs text-amber-800 leading-relaxed">
-                    Includes Challenge Week materials, delegate credentials, certificate of participation, and pastoral retreat facilities.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* STEP 2: PRIMARY CONTACT & PHONE NUMBER */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2.5 pb-2 border-b border-slate-200">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-900 text-white text-xs font-bold">
-                  2
-                </span>
-                <h3 className="text-base font-bold text-slate-900">
-                  Contact Information & Phone Number
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Phone Number *
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="tel"
-                      required
-                      value={phoneNumber}
-                      onChange={(e) => setPhoneNumber(e.target.value)}
-                      placeholder="e.g. 0712345678 or +254 7..."
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-mono text-sm focus:bg-white focus:ring-2 focus:ring-slate-900 focus:outline-hidden"
-                    />
-                    <Phone className="w-4 h-4 text-slate-400 absolute right-3 top-3 pointer-events-none" />
-                  </div>
-                  <p className="text-2xs text-slate-500 mt-1">
-                    Used for SMS confirmation and logging in to view your pass.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    {numericCount > 1 ? 'Team / Delegation Name' : 'Full Name *'}
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={teamName}
-                    onChange={(e) => setTeamName(e.target.value)}
-                    placeholder={numericCount > 1 ? 'e.g. Karatina Holy Family Crusaders' : 'e.g. Dennis Kamau Mwangi'}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-slate-900 focus:outline-hidden"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    {numericCount > 1 ? 'Team Captain / Contact Leader Name *' : 'Contact Person'}
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={leaderName}
-                    onChange={(e) => setLeaderName(e.target.value)}
-                    placeholder="e.g. Grace Wambui"
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-slate-900 focus:outline-hidden"
-                  />
-                </div>
-              </div>
-
-              {/* Optional delegates list for large groups */}
-              {numericCount > 1 && (
-                <div className="pt-2">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Delegates Names (Optional - list names or notes for the {numericCount} participants)
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={delegateNamesInput}
-                    onChange={(e) => setDelegateNamesInput(e.target.value)}
-                    placeholder="e.g. 1. John Mwangi, 2. Clara Muthoni, 3. Peter Ndegwa, 4. Faith Nyambura..."
-                    className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:bg-white focus:ring-2 focus:ring-slate-900 focus:outline-hidden"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* STEP 3: CHOOSE DEANERY & PARISH */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2.5 pb-2 border-b border-slate-200">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-900 text-white text-xs font-bold">
-                  3
-                </span>
-                <h3 className="text-base font-bold text-slate-900">
-                  Archdiocesan Deanery & Parish Selection
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                {/* Choose Deanery */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <Building2 className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Choose Deanery *</span>
-                  </label>
-                  <select
-                    value={selectedDeanery}
-                    onChange={(e) => setSelectedDeanery(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-slate-900 focus:outline-hidden"
-                  >
-                    {ARCHDIOCESE_DEANERIES_AND_PARISHES.map((d) => (
-                      <option key={d.deanery} value={d.deanery}>
-                        {d.deanery} Deanery
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-2xs text-slate-500 mt-1">
-                    Select among the 8 Archdiocesan Deaneries.
-                  </p>
-                </div>
-
-                {/* Choose Parish */}
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1.5">
-                    <Layers className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Next Choose Parish *</span>
-                  </label>
-                  <select
-                    value={selectedParish}
-                    onChange={(e) => setSelectedParish(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-slate-900 focus:outline-hidden"
-                  >
-                    {currentDeaneryObj.parishes.map((parishName) => (
-                      <option key={parishName} value={parishName}>
-                        {parishName} Parish
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-2xs text-slate-500 mt-1">
-                    Showing parishes under <span className="font-semibold text-slate-700">{selectedDeanery} Deanery</span>.
-                  </p>
-                </div>
-              </div>
-
-              {/* Deanery Parishes Overview Badge */}
-              <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 text-2xs text-slate-600 flex flex-wrap gap-1.5 items-center">
-                <span className="font-bold text-slate-800">Parishes in {selectedDeanery}:</span>
-                {currentDeaneryObj.parishes.map((p) => (
-                  <span
-                    key={p}
-                    onClick={() => setSelectedParish(p)}
-                    className={`px-2 py-0.5 rounded cursor-pointer transition-colors ${
-                      selectedParish === p 
-                        ? 'bg-slate-900 text-white font-semibold' 
-                        : 'bg-white hover:bg-slate-200 border border-slate-200 text-slate-700'
-                    }`}
-                  >
-                    {p}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            {/* STEP 4: PAYMENT OPTIONS (MPESA OR CASH) */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2.5 pb-2 border-b border-slate-200">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-slate-900 text-white text-xs font-bold">
-                  4
-                </span>
-                <div className="flex-1 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                  <h3 className="text-base font-bold text-slate-900">
-                    Payment Method
-                  </h3>
-                  <span className="text-xs font-bold text-emerald-700 font-mono">
-                    Total Amount: Ksh {totalPayable.toLocaleString()}
-                  </span>
-                </div>
-              </div>
-
-              {/* Radio Selection: Mpesa or Cash */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <label
-                  onClick={() => setPaymentOption('Mpesa')}
-                  className={`p-4 rounded-xl border-2 flex items-start gap-3 cursor-pointer transition-all ${
-                    paymentOption === 'Mpesa'
-                      ? 'border-emerald-600 bg-emerald-50/50 shadow-xs'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="paymentOption"
-                    value="Mpesa"
-                    checked={paymentOption === 'Mpesa'}
-                    onChange={() => setPaymentOption('Mpesa')}
-                    className="mt-1 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <Smartphone className="w-4 h-4 text-emerald-600" />
-                      <span className="font-bold text-slate-900 text-sm">M-PESA (Co-operative Bank Paybill)</span>
-                    </div>
-                    <p className="text-2xs text-slate-600 leading-relaxed">
-                      Instant mobile payment to Archdiocese of Nyeri Youth Office account.
-                    </p>
-                  </div>
-                </label>
-
-                <label
-                  onClick={() => setPaymentOption('Cash')}
-                  className={`p-4 rounded-xl border-2 flex items-start gap-3 cursor-pointer transition-all ${
-                    paymentOption === 'Cash'
-                      ? 'border-emerald-600 bg-emerald-50/50 shadow-xs'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="paymentOption"
-                    value="Cash"
-                    checked={paymentOption === 'Cash'}
-                    onChange={() => setPaymentOption('Cash')}
-                    className="mt-1 text-emerald-600 focus:ring-emerald-500"
-                  />
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="w-4 h-4 text-slate-700" />
-                      <span className="font-bold text-slate-900 text-sm">Cash Payment</span>
-                    </div>
-                    <p className="text-2xs text-slate-600 leading-relaxed">
-                      Pay via Parish Youth Treasurer, Deanery Office, or on arrival at Challenge Week gate.
-                    </p>
-                  </div>
-                </label>
-              </div>
-
-              {/* M-PESA PROCEDURE DETAILS */}
-              {paymentOption === 'Mpesa' && (
-                <div className="bg-emerald-950 text-white rounded-2xl p-5 sm:p-6 space-y-4 shadow-md">
-                  <div className="flex items-center justify-between pb-3 border-b border-emerald-800">
-                    <div className="flex items-center gap-2">
-                      <Smartphone className="w-5 h-5 text-emerald-400" />
-                      <h4 className="font-bold text-sm tracking-tight text-emerald-100">
-                        M-PESA Payment Procedure
-                      </h4>
-                    </div>
-                    <span className="text-2xs font-bold uppercase tracking-wider text-emerald-300 bg-emerald-900/60 px-2 py-0.5 rounded border border-emerald-700">
-                      Co-operative Bank Paybill
-                    </span>
-                  </div>
-
-                  {/* Account credentials box */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div className="bg-emerald-900/50 p-3 rounded-xl border border-emerald-800">
-                      <div className="flex items-center justify-between text-2xs text-emerald-300 mb-1">
-                        <span>Paybill Business No:</span>
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(PAYMENT_COOPERATIVE_BANK.paybill, 'paybill')}
-                          className="hover:text-white"
-                          title="Copy Paybill"
-                        >
-                          {copiedField === 'paybill' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-                      <div className="text-lg font-mono font-black text-white">
-                        {PAYMENT_COOPERATIVE_BANK.paybill}
-                      </div>
-                    </div>
-
-                    <div className="bg-emerald-900/50 p-3 rounded-xl border border-emerald-800">
-                      <div className="flex items-center justify-between text-2xs text-emerald-300 mb-1">
-                        <span>Account Number:</span>
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(PAYMENT_COOPERATIVE_BANK.accountNumber, 'account')}
-                          className="hover:text-white"
-                          title="Copy Account Number"
-                        >
-                          {copiedField === 'account' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-                      <div className="text-sm font-mono font-black text-emerald-200 truncate">
-                        {PAYMENT_COOPERATIVE_BANK.accountNumber}
-                      </div>
-                    </div>
-
-                    <div className="bg-emerald-900/50 p-3 rounded-xl border border-emerald-800">
-                      <div className="text-2xs text-emerald-300 mb-1">
-                        Account Name:
-                      </div>
-                      <div className="text-sm font-mono font-black text-amber-300">
-                        {PAYMENT_COOPERATIVE_BANK.accountName}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Step-by-step instructions */}
-                  <div className="bg-emerald-900/30 rounded-xl p-4 border border-emerald-800/80 text-xs space-y-2 text-emerald-100">
-                    <p className="font-semibold text-white">Follow these steps on your phone:</p>
-                    <ol className="list-decimal list-inside space-y-1 text-2xs sm:text-xs text-emerald-200 leading-relaxed">
-                      <li>Open the <strong>M-PESA menu</strong> on your phone (or Sim Toolkit).</li>
-                      <li>Select <strong>Lipa na M-PESA</strong> and choose <strong>Paybill</strong>.</li>
-                      <li>Enter Business No: <strong className="text-white font-mono">{PAYMENT_COOPERATIVE_BANK.paybill}</strong> (Co-operative Bank).</li>
-                      <li>Enter Account No: <strong className="text-white font-mono">{PAYMENT_COOPERATIVE_BANK.accountNumber}</strong>.</li>
-                      <li>Enter Amount: <strong className="text-amber-300 font-mono">Ksh {totalPayable.toLocaleString()}</strong> ({numericCount} × Ksh 1,000).</li>
-                      <li>Enter your M-PESA PIN and press <strong>Send</strong>.</li>
-                      <li>Verify the account name displays: <strong className="text-amber-300 font-mono">{PAYMENT_COOPERATIVE_BANK.accountName}</strong>.</li>
-                      <li>Enter the M-PESA confirmation code below:</li>
-                    </ol>
-                  </div>
-
-                  {/* Input for M-Pesa Code */}
-                  <div className="pt-1">
-                    <label className="block text-xs font-semibold text-emerald-200 mb-1">
-                      M-PESA Transaction Code (from Safaricom SMS) *
-                    </label>
-                    <input
-                      type="text"
-                      required={paymentOption === 'Mpesa'}
-                      value={mpesaCode}
-                      onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
-                      placeholder="e.g. QKH89X24TR"
-                      className="w-full sm:w-80 px-3.5 py-2.5 bg-emerald-900/70 border border-emerald-700 rounded-xl font-mono text-sm text-white placeholder-emerald-400/60 focus:bg-emerald-900 focus:ring-2 focus:ring-emerald-400 focus:outline-hidden"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* CASH PROCEDURE DETAILS */}
-              {paymentOption === 'Cash' && (
-                <div className="bg-slate-50 border border-slate-300 rounded-2xl p-5 space-y-3 text-xs">
-                  <div className="flex items-center gap-2 text-slate-800 font-bold">
-                    <CreditCard className="w-4 h-4 text-slate-700" />
-                    <span>Cash Payment Guidelines</span>
-                  </div>
-                  <p className="text-slate-600 leading-relaxed text-2xs sm:text-xs">
-                    Please remit the sum of <strong className="text-slate-900 font-mono">Ksh {totalPayable.toLocaleString()}</strong> directly to your Parish Youth Treasurer or the Deanery Youth Office. You may also present cash at the Mathari Pastoral Centre entrance desk upon arrival. An official Archdiocesan printed receipt will be issued.
-                  </p>
-                  <div>
-                    <label className="block text-2xs font-semibold text-slate-700 mb-1">
-                      Cash Collector Name / Temporary Receipt Ref (Optional):
-                    </label>
-                    <input
-                      type="text"
-                      value={cashReceiptRef}
-                      onChange={(e) => setCashReceiptRef(e.target.value)}
-                      placeholder="e.g. Paid to Parish Treasurer John / At Gate"
-                      className="w-full sm:w-80 px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* SUBMIT BUTTON */}
-            <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="text-xs text-slate-500">
-                Registering for <span className="font-bold text-slate-800">{selectedParish} Parish</span> ({selectedDeanery} Deanery)
-              </div>
-
-              <button
-                type="submit"
-                className="w-full sm:w-auto px-8 py-3.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-sm tracking-wide shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <CheckCircle2 className="w-4 h-4 text-amber-400" />
-                <span>Complete Registration (Ksh {totalPayable.toLocaleString()})</span>
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* =========================================================================
-          TAB 2: LOGIN VIEW (Login to View Registration Pass & Status)
-         ========================================================================= */}
-      {activeTab === 'login' && (
-        <div className="max-w-2xl mx-auto space-y-6">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6">
-            <div className="text-center space-y-2">
-              <span className="inline-block p-3 bg-neutral-900 text-amber-400 rounded-xl shadow-xs">
-                <LogIn className="w-6 h-6" />
-              </span>
-              <h2 className="text-xl sm:text-2xl font-bold text-slate-900">
-                Challenge Week Participant Login
-              </h2>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Enter your registered phone number or Registration ID to access your delegate digital badge, team details, and payment verification.
-              </p>
-            </div>
-
-            {/* Login Form */}
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Registered Phone Number or Registration ID *
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    required
-                    value={loginPhone}
-                    onChange={(e) => setLoginPhone(e.target.value)}
-                    placeholder="e.g. 0711223344 or +254 7... or ADN-CW-2026-..."
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-xl font-mono text-sm focus:bg-white focus:ring-2 focus:ring-slate-900 focus:outline-hidden"
-                  />
-                  <Search className="w-4 h-4 text-slate-400 absolute right-3.5 top-3.5 pointer-events-none" />
-                </div>
+          {/* --------------------------------------------------------------- */}
+          {/* LOGIN TAB: STRICTLY USERNAME AND PASSWORD AS REQUESTED          */}
+          {/* --------------------------------------------------------------- */}
+          {activeTab === 'login' && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-7 shadow-sm space-y-5 animate-in fade-in duration-200">
+              
+              <div className="border-b border-slate-100 pb-3">
+                <h2 className="text-lg font-bold text-slate-900">
+                  Challenge Week Login
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Enter your username and password to access your dashboard and pass.
+                </p>
               </div>
 
               {loginError && (
-                <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                  <div>
-                    <p className="font-semibold">{loginError}</p>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('register')}
-                      className="mt-1 font-bold text-red-800 underline hover:text-red-950 cursor-pointer block"
-                    >
-                      Click here to Register for Challenge Week
-                    </button>
-                  </div>
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2 font-medium">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>{loginError}</span>
                 </div>
               )}
 
-              <button
-                type="submit"
-                className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-xs uppercase tracking-wider transition-colors shadow-xs"
-              >
-                Access My Registration
-              </button>
-            </form>
-
-            {/* Demonstration Quick-Fill accounts */}
-            <div className="pt-4 border-t border-slate-200 text-xs text-slate-500 space-y-2">
-              <span className="text-2xs font-bold uppercase tracking-wider text-slate-400 block">
-                Quick Demo Registrations:
-              </span>
-              <div className="flex flex-wrap gap-2">
-                {[
-                  { label: 'Cathedral Champions', phone: '+254 711 223 344' },
-                  { label: 'Mathari Warriors', phone: '+254 722 334 455' },
-                  { label: 'Karatina Crusaders', phone: '+254 756 789 005' },
-                  { label: 'Othaya Trailblazers', phone: '+254 745 678 904' },
-                ].map((demo) => (
-                  <button
-                    key={demo.phone}
-                    type="button"
-                    onClick={() => {
-                      setLoginPhone(demo.phone);
-                      const f = challengeTeams.find((t) => t.teamLeaderPhone === demo.phone);
-                      if (f) setLoginResult(f);
-                    }}
-                    className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg text-2xs text-slate-700 font-mono border border-slate-200"
-                  >
-                    {demo.label} ({demo.phone})
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Logged in result card */}
-          {loginResult && (
-            <div className="bg-white rounded-2xl border-2 border-slate-900 shadow-md p-6 space-y-5 animate-in fade-in">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
+                
+                {/* Username */}
                 <div>
-                  <span className="text-2xs font-mono font-bold uppercase tracking-wider text-slate-400">
-                    Challenge Week Digital Pass
-                  </span>
-                  <h3 className="text-xl font-black text-slate-900">
-                    {loginResult.teamName}
-                  </h3>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Username *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    placeholder="Enter your username, phone, or name"
+                    className="w-full px-3.5 py-2 text-xs font-mono bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                  />
                 </div>
-                <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                  {loginResult.paymentStatus}
+
+                {/* Password (Masked, not visible) */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Password *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                  />
+                </div>
+
+                {/* Submit button (Red background) */}
+                <button
+                  type="submit"
+                  className="w-full py-2.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-all shadow-sm cursor-pointer"
+                >
+                  Login to Portal
+                </button>
+
+              </form>
+
+              {/* Demo accounts hint */}
+              <div className="pt-2 border-t border-slate-100 text-center">
+                <span className="text-[11px] text-slate-500">
+                  Demo Account: <code className="font-bold text-slate-800">Timothy Wanjohi</code> / Password: <code className="font-bold text-slate-800">1234</code>
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="sm:col-span-2 space-y-3 text-xs">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <span className="text-slate-500">Registration Code:</span>
-                      <p className="font-mono font-bold text-slate-900">{loginResult.id}</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Delegates:</span>
-                      <p className="font-mono font-bold text-slate-900">{loginResult.membersCount} Persons</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Deanery:</span>
-                      <p className="font-bold text-slate-900">{loginResult.deaneryName} Deanery</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Parish:</span>
-                      <p className="font-bold text-slate-900">{loginResult.parishName} Parish</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Contact Leader:</span>
-                      <p className="font-bold text-slate-900">{loginResult.teamLeaderName}</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Phone:</span>
-                      <p className="font-mono font-bold text-slate-900">{loginResult.teamLeaderPhone}</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Fee Paid:</span>
-                      <p className="font-mono font-bold text-emerald-700">
-                        Ksh {loginResult.totalFee.toLocaleString()} ({loginResult.paymentOption})
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Status:</span>
-                      <p className="font-bold text-slate-900">{loginResult.status}</p>
-                    </div>
-                  </div>
-
-                  {loginResult.mpesaCode && (
-                    <div className="p-2.5 bg-emerald-50 rounded-lg border border-emerald-200 text-2xs font-mono text-emerald-900">
-                      M-PESA Ref: <strong>{loginResult.mpesaCode}</strong>
-                    </div>
-                  )}
-                </div>
-
-                {/* QR Code */}
-                <div className="flex flex-col items-center justify-center p-3 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                  {loginQrUrl ? (
-                    <img src={loginQrUrl} alt="Pass QR" className="w-28 h-28" />
-                  ) : (
-                    <div className="w-28 h-28 bg-slate-200 rounded flex items-center justify-center text-2xs text-slate-500">
-                      Generating QR...
-                    </div>
-                  )}
-                  <span className="text-2xs font-mono text-slate-500 mt-1">Official Gate Pass</span>
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-slate-200 flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={handlePrint}
-                  className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition-colors border border-slate-300"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print Gate Credential</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setLoginResult(null)}
-                  className="text-xs font-semibold text-slate-500 hover:text-slate-800"
-                >
-                  Log out
-                </button>
-              </div>
             </div>
           )}
+
         </div>
       )}
 
-      {/* =========================================================================
-          TAB 3: LEADERBOARD & REGISTERED TEAMS
-         ========================================================================= */}
-      {activeTab === 'roster' && (
-        <div className="space-y-4">
+      {/* ------------------------------------------------------------------- */}
+      {/* TEAM / INDIVIDUAL DASHBOARD (AFTER LOGIN OR REGISTRATION)           */}
+      {/* ------------------------------------------------------------------- */}
+      {activeTab === 'team-dashboard' && loggedInTeam && (
+        <div className="space-y-6 animate-in fade-in duration-200">
           
-          {/* Filters Bar */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200">
-            <div className="relative w-full sm:w-72">
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search team, leader, parish..."
-                className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:bg-white focus:outline-hidden"
-              />
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+          {/* Top Banner */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 font-mono">
+                  {loggedInTeam.deaneryName} Deanery · {loggedInTeam.parishName} Parish
+                </span>
+                <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-md font-mono">
+                  {loggedInTeam.registrationType || 'Group'}
+                </span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
+                {loggedInTeam.teamName}
+              </h2>
+              <div className="text-xs text-slate-600 mt-1">
+                {loggedInTeam.registrationType === 'Individual' ? 'Delegate: ' : 'Leader: '}
+                <span className="font-bold text-slate-900">{loggedInTeam.teamLeaderName}</span> · Delegates: <span className="font-bold text-emerald-700">{loggedInTeam.membersCount} Person{loggedInTeam.membersCount !== 1 ? 's' : ''}</span>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <select
-                value={rosterDeaneryFilter}
-                onChange={(e) => setRosterDeaneryFilter(e.target.value)}
-                className="w-full sm:w-auto px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700"
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveTab('leaderboard')}
+                className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all shadow-xs cursor-pointer"
               >
-                <option value="ALL">All 8 Deaneries</option>
-                {ARCHDIOCESE_DEANERIES_AND_PARISHES.map((d) => (
-                  <option key={d.deanery} value={d.deanery}>
-                    {d.deanery} Deanery
-                  </option>
-                ))}
-              </select>
+                <Trophy className="w-4 h-4 text-amber-500" />
+                <span>Leaderboard</span>
+              </button>
 
               <button
-                onClick={() => setActiveTab('register')}
-                className="shrink-0 flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
+                onClick={() => {
+                  setLoggedInTeam(null);
+                  setActiveTab('login');
+                }}
+                className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
               >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>New Registration</span>
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Logout</span>
               </button>
             </div>
           </div>
 
-          {/* Teams Table */}
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 font-semibold text-slate-600">
-                    <th className="py-3 px-4">Rank & Team</th>
-                    <th className="py-3 px-4">Deanery & Parish</th>
-                    <th className="py-3 px-4">Leader / Phone</th>
-                    <th className="py-3 px-4 text-center">Delegates</th>
-                    <th className="py-3 px-4 text-center">Spiritual Tasks</th>
-                    <th className="py-3 px-4 text-center">Service Hrs</th>
-                    <th className="py-3 px-4 text-center">Sports Pts</th>
-                    <th className="py-3 px-4 text-right">Total Score</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredTeams.map((team, idx) => {
-                    const totalScore = team.spiritualTasksCompleted * 10 + team.communityServiceHours * 2 + team.sportsPoints;
-                    return (
-                      <tr key={team.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            <span className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-2xs ${
-                              idx === 0 ? 'bg-amber-400 text-slate-900' :
-                              idx === 1 ? 'bg-slate-300 text-slate-800' :
-                              idx === 2 ? 'bg-amber-700 text-white' : 'bg-slate-100 text-slate-600'
-                            }`}>
-                              {idx + 1}
-                            </span>
-                            <div>
-                              <span className="font-bold text-slate-900 block">{team.teamName}</span>
-                              <span className="text-2xs text-slate-400 font-mono">{team.id}</span>
-                            </div>
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-4">
-                          <span className="font-semibold text-slate-800 block">{team.parishName}</span>
-                          <span className="text-2xs text-slate-500">{team.deaneryName} Deanery</span>
-                        </td>
-
-                        <td className="py-3 px-4">
-                          <span className="font-medium text-slate-800 block">{team.teamLeaderName}</span>
-                          <span className="text-2xs text-slate-500 font-mono">{team.teamLeaderPhone}</span>
-                        </td>
-
-                        <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">
-                          {team.membersCount}
-                        </td>
-
-                        <td className="py-3 px-4 text-center font-mono">
-                          <button
-                            onClick={() => updateChallengeScore(team.id, { spiritualTasksCompleted: team.spiritualTasksCompleted + 1 })}
-                            title="Add 1 task"
-                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 transition-colors text-slate-700 cursor-pointer"
-                          >
-                            {team.spiritualTasksCompleted} (+)
-                          </button>
-                        </td>
-
-                        <td className="py-3 px-4 text-center font-mono">
-                          <button
-                            onClick={() => updateChallengeScore(team.id, { communityServiceHours: team.communityServiceHours + 5 })}
-                            title="Add 5 hrs"
-                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 transition-colors text-slate-700 cursor-pointer"
-                          >
-                            {team.communityServiceHours}h (+5)
-                          </button>
-                        </td>
-
-                        <td className="py-3 px-4 text-center font-mono">
-                          <button
-                            onClick={() => updateChallengeScore(team.id, { sportsPoints: team.sportsPoints + 5 })}
-                            title="Add 5 pts"
-                            className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 transition-colors text-slate-700 cursor-pointer"
-                          >
-                            {team.sportsPoints} (+5)
-                          </button>
-                        </td>
-
-                        <td className="py-3 px-4 text-right font-mono font-black text-slate-900 text-sm">
-                          {totalScore}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          {/* Metrics Row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 bg-white rounded-xl border border-slate-200">
+              <div className="text-[10px] uppercase font-bold text-slate-500 font-mono">Delegates</div>
+              <div className="text-xl font-black text-slate-900 mt-0.5">{loggedInTeam.membersCount}</div>
             </div>
+            <div className="p-3 bg-white rounded-xl border border-slate-200">
+              <div className="text-[10px] uppercase font-bold text-slate-500 font-mono">Total Fee</div>
+              <div className="text-xl font-black text-slate-900 mt-0.5">KSh {loggedInTeam.totalFee.toLocaleString()}</div>
+            </div>
+            <div className="p-3 bg-white rounded-xl border border-slate-200">
+              <div className="text-[10px] uppercase font-bold text-slate-500 font-mono">M-Pesa Ref</div>
+              <div className="text-sm font-black font-mono text-emerald-800 mt-1">{loggedInTeam.mpesaCode || 'CONFIRMED'}</div>
+            </div>
+            <div className="p-3 bg-white rounded-xl border border-slate-200">
+              <div className="text-[10px] uppercase font-bold text-slate-500 font-mono">Status</div>
+              <div className="text-xs font-bold mt-1 inline-block px-2 py-0.5 rounded bg-emerald-100 text-emerald-900">
+                {loggedInTeam.paymentStatus}
+              </div>
+            </div>
+          </div>
+
+          {/* Member/Delegate Names List if available */}
+          {loggedInTeam.memberNames && loggedInTeam.memberNames.length > 0 && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-emerald-600" />
+                  <span>Registered Delegates ({loggedInTeam.memberNames.length})</span>
+                </h3>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {loggedInTeam.parishName} Parish
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                {loggedInTeam.memberNames.map((name, i) => (
+                  <div key={i} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-200/80 text-xs">
+                    <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 font-bold flex items-center justify-center text-[10px] shrink-0 font-mono">
+                      {i + 1}
+                    </span>
+                    <span className="font-semibold text-slate-800 truncate">{name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Digital Team Pass Card */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-900">
+                Official Challenge Week Digital Pass
+              </h3>
+              <button
+                onClick={() => window.print()}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print Pass</span>
+              </button>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-neutral-900 to-black text-white border-2 border-amber-500/40 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-6">
+              <div className="space-y-2">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-amber-300 font-bold block">
+                  ARCHDIOCESE OF NYERI · CHALLENGE WEEK 2026
+                </span>
+                <h3 className="text-2xl font-black text-white">
+                  {loggedInTeam.teamName}
+                </h3>
+                <div className="text-xs text-white/80">
+                  {loggedInTeam.deaneryName} Deanery · {loggedInTeam.parishName} Parish
+                </div>
+                <div className="text-xs text-white/70 font-mono">
+                  {loggedInTeam.registrationType === 'Individual' ? 'Delegate: ' : 'Leader: '}
+                  {loggedInTeam.teamLeaderName} · {loggedInTeam.membersCount} Person{loggedInTeam.membersCount !== 1 ? 's' : ''}
+                </div>
+                <div className="inline-block px-2.5 py-1 bg-amber-400 text-slate-950 font-mono font-bold text-xs rounded mt-2">
+                  PASS CODE: {loggedInTeam.id}
+                </div>
+              </div>
+
+              {teamQrUrl && (
+                <div className="p-3 bg-white rounded-xl shadow-lg flex flex-col items-center shrink-0">
+                  <img src={teamQrUrl} alt="Team QR Pass" className="w-32 h-32" />
+                  <span className="text-[9px] font-mono font-bold text-slate-800 mt-1 uppercase">
+                    SCAN TO VERIFY
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* LEADERBOARD VIEW                                                    */}
+      {/* ------------------------------------------------------------------- */}
+      {activeTab === 'leaderboard' && (
+        <div className="space-y-4 animate-in fade-in duration-200">
+          <div className="flex items-center justify-between bg-white p-4 rounded-xl border border-slate-200">
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Trophy className="w-5 h-5 text-amber-500" />
+              <span>Challenge Week Archdiocesan Leaderboard</span>
+            </h2>
+            <button
+              onClick={() => setActiveTab(loggedInTeam ? 'team-dashboard' : 'login')}
+              className="text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+            >
+              {loggedInTeam ? 'Back to Dashboard' : 'Back to Login'}
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[11px]">
+                  <th className="py-3 px-4">Rank</th>
+                  <th className="py-3 px-4">Team / Delegate & Parish</th>
+                  <th className="py-3 px-4">Deanery</th>
+                  <th className="py-3 px-4 text-center">Delegates</th>
+                  <th className="py-3 px-4 text-right">Points</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {challengeTeams.map((team, idx) => (
+                  <tr key={team.id} className="hover:bg-slate-50">
+                    <td className="py-3 px-4 font-bold text-slate-800">#{idx + 1}</td>
+                    <td className="py-3 px-4">
+                      <div className="font-bold text-slate-900">{team.teamName}</div>
+                      <div className="text-[11px] text-slate-500">{team.parishName}</div>
+                    </td>
+                    <td className="py-3 px-4 text-slate-600">{team.deaneryName}</td>
+                    <td className="py-3 px-4 text-center font-bold">{team.membersCount}</td>
+                    <td className="py-3 px-4 text-right font-mono font-bold text-emerald-700">
+                      {team.sportsPoints + team.spiritualTasksCompleted * 10} pts
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

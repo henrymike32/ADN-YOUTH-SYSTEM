@@ -22,9 +22,10 @@ export type LeadershipRole =
   | 'Youth Animator / Patron';
 
 export type YouthStatus = 'Active' | 'Relocated' | 'Alumni/Graduated' | 'Inactive';
+export type RegistrationApprovalStatus = 'Pending' | 'Confirmed' | 'Rejected';
 
 export interface YouthMember {
-  id: string; // e.g. ADN-YTH-2026-0101
+  id: string; // unique code e.g. ADN-YTH-2026-0101
   fullName: string;
   gender: 'Male' | 'Female';
   dob: string;
@@ -33,7 +34,7 @@ export interface YouthMember {
   email: string;
   deaneryId: string;
   parishId: string;
-  subParish: string; // Outstation / Kigango
+  subParish: string; // Outstation / Local church
   movement: YouthMovement;
   occupation: string;
   institution?: string;
@@ -50,7 +51,50 @@ export interface YouthMember {
   bloodGroup?: string;
   skills: string[];
   avatarUrl?: string;
+
+  // Fields for Parish Registration Workflow
+  approvalStatus?: RegistrationApprovalStatus; // 'Pending' until admin confirms & accepts
+  registeredByLeaderPhone?: string;
+  registeredByLeaderName?: string;
+  localChurch?: string;
+  mpesaRef?: string;
+  registrationFee?: number; // 100 KES
+  batchId?: string;
 }
+
+export interface ParishRegistrationBatch {
+  id: string;
+  leaderPhone: string;
+  leaderName: string;
+  password?: string;
+  deaneryId: string;
+  deaneryName: string;
+  parishId: string;
+  parishName: string;
+  localChurch: string;
+  memberCount: number; // up to 200 members
+  feePerMember: number; // 100 KES
+  totalFee: number;
+  mpesaCode: string;
+  mpesaPhone: string;
+  paymentStatus: 'Pending' | 'Verified';
+  approvalStatus: RegistrationApprovalStatus; // 'Pending' until admin accepts
+  approvedBy?: string;
+  approvedAt?: string;
+  submittedAt: string;
+  memberIds: string[];
+}
+
+export interface ParishLeaderAccount {
+  leaderPhone: string;
+  leaderName: string;
+  password: string;
+  deaneryName: string;
+  parishName: string;
+  localChurch: string;
+  batchId?: string;
+}
+
 
 export interface Parish {
   id: string;
@@ -109,15 +153,19 @@ export interface ArchdiocesanEvent {
 export interface NiccaStudent {
   id: string;
   fullName: string;
-  gender: 'Male' | 'Female';
   institution: string; // e.g. DeKUT, Karatina University, KMTC Nyeri, Kagumo TTC, Nyeri Poly
-  course: string;
-  yearOfStudy: string; // Year 1, Year 2, Year 3, Year 4, Postgraduate
   phone: string;
-  email: string;
-  homeParish: string;
-  homeDeanery: string;
-  campusMinistryRole: string; // e.g. Chairperson, Choir, Liturgy, Member
+  course: string;
+  password?: string;
+  mpesaCode?: string;
+  amountPaid?: number; // 100 bob
+  paymentStatus?: 'Paid' | 'Pending';
+  gender?: 'Male' | 'Female';
+  yearOfStudy?: string; // Year 1, Year 2, Year 3, Year 4, Postgraduate
+  email?: string;
+  homeParish?: string;
+  homeDeanery?: string;
+  campusMinistryRole?: string; // e.g. Chairperson, Choir, Liturgy, Member
   registrationDate: string;
 }
 
@@ -125,6 +173,8 @@ export interface NiccaStudent {
 export interface ChallengeWeekTeam {
   id: string;
   teamName: string;
+  registrationType?: 'Individual' | 'Group';
+  memberNames?: string[];
   parishId?: string;
   deaneryId?: string;
   deaneryName: string;
@@ -141,6 +191,8 @@ export interface ChallengeWeekTeam {
   mpesaCode?: string;
   paymentStatus: 'Confirmed' | 'Pending Verification';
   loginPin: string;
+  username?: string;
+  password?: string;
   status: 'Registered' | 'Active' | 'Finalist';
   registrationDate: string;
 }
