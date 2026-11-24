@@ -107,6 +107,7 @@ export const ChallengeWeekModuleView: React.FC<ChallengeWeekProps> = ({ onBackTo
     if (loggedInTeam) {
       const qrPayload = JSON.stringify({
         system: 'Catholic Archdiocese of Nyeri - Challenge Week 2026',
+        domain: 'system.quovadisyouthhub.org',
         id: loggedInTeam.id,
         type: loggedInTeam.registrationType || 'Group',
         name: loggedInTeam.teamName,

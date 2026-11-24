@@ -39,6 +39,7 @@ export const MemberPortalView: React.FC<MemberPortalViewProps> = ({ onOpenCardMo
     if (!activeMember) return;
     const payload = JSON.stringify({
       system: 'Archdiocese of Nyeri Youth Portal',
+      domain: 'system.quovadisyouthhub.org',
       id: activeMember.id,
       name: activeMember.fullName,
       parish: memberParish?.name,

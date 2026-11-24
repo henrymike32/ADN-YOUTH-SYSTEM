@@ -18,6 +18,7 @@ export const MemberCardModal: React.FC<MemberCardModalProps> = ({ member, onClos
     if (!member) return;
     const verificationPayload = JSON.stringify({
       system: 'Archdiocese of Nyeri Youth Management Portal',
+      domain: 'system.quovadisyouthhub.org',
       id: member.id,
       name: member.fullName,
       parishId: member.parishId,
