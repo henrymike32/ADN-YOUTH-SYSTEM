@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useYouth } from '../context/YouthContext';
 import { RemittanceType } from '../types';
-import { X, Smartphone, Save } from 'lucide-react';
+import { X, Smartphone, Save, AlertCircle } from 'lucide-react';
 
 interface RemittanceModalProps {
   isOpen: boolean;
@@ -20,33 +20,42 @@ export const RemittanceModal: React.FC<RemittanceModalProps> = ({ isOpen, onClos
   const [paidBy, setPaidBy] = useState('');
   const [paidByPhone, setPaidByPhone] = useState('+254 7');
   const [notes, setNotes] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
   const selectedParish = parishes.find((p) => p.id === parishId) || parishes[0];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!parishId || !amount || !mpesaRef.trim() || !paidBy.trim()) {
-      alert('Please fill in Parish, Amount, M-Pesa Code, and Payer Name.');
+    setFormError(null);
+    if (!parishId || !amount || !mpesaRef.trim() || !paidBy.trim() || !selectedParish) {
+      setFormError('Please fill in Parish, Amount, M-Pesa Code, and Payer Name.');
       return;
     }
 
-    addRemittance({
-      parishId,
-      deaneryId: selectedParish.deaneryId,
-      remittanceType,
-      amount: Number(amount),
-      mpesaRef: mpesaRef.trim().toUpperCase(),
-      paidBy: paidBy.trim(),
-      paidByPhone: paidByPhone.trim(),
-      date: new Date().toISOString().split('T')[0],
-      status: 'Verified',
-      verifiedBy: 'Archdiocesan Finance Office',
-      notes: notes.trim(),
-    });
-
-    onClose();
+    setIsSubmitting(true);
+    try {
+      await addRemittance({
+        parishId,
+        deaneryId: selectedParish.deaneryId,
+        remittanceType,
+        amount: Number(amount),
+        mpesaRef: mpesaRef.trim().toUpperCase(),
+        paidBy: paidBy.trim(),
+        paidByPhone: paidByPhone.trim(),
+        date: new Date().toISOString().split('T')[0],
+        status: 'Verified',
+        verifiedBy: 'Archdiocesan Finance Office',
+        notes: notes.trim(),
+      });
+      onClose();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Unable to save remittance.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -63,6 +72,12 @@ export const RemittanceModal: React.FC<RemittanceModalProps> = ({ isOpen, onClos
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {formError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+              <span>{formError}</span>
+            </div>
+          )}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Remitting Parish *
@@ -190,10 +205,11 @@ export const RemittanceModal: React.FC<RemittanceModalProps> = ({ isOpen, onClos
             </button>
             <button
               type="submit"
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors"
+              disabled={isSubmitting}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 rounded-lg transition-colors"
             >
               <Save className="w-3.5 h-3.5 text-amber-400" />
-              <span>Record Remittance</span>
+              <span>{isSubmitting ? 'Saving...' : 'Record Remittance'}</span>
             </button>
           </div>
         </form>

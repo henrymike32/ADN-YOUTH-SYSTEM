@@ -22,6 +22,8 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({ isOpen, onClos
   } = useYouth();
 
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
 
   if (!isOpen) return null;
 
@@ -43,25 +45,40 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({ isOpen, onClos
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const content = event.target?.result as string;
       if (content) {
-        const success = importDataJson(content);
-        if (success) {
-          setImportStatus('Database successfully restored from JSON file.');
-          setTimeout(() => setImportStatus(null), 3000);
-        } else {
-          setImportStatus('Error: Invalid database JSON structure.');
+        setIsBusy(true);
+        try {
+          const success = await importDataJson(content);
+          if (success) {
+            setImportStatus('Database successfully restored from JSON file.');
+            setTimeout(() => setImportStatus(null), 3000);
+          } else {
+            setImportStatus('Error: Invalid database JSON structure or Admin sign-in required.');
+          }
+        } catch (err) {
+          setImportStatus(err instanceof Error ? err.message : 'Error restoring database backup.');
+        } finally {
+          setIsBusy(false);
         }
       }
     };
     reader.readAsText(file);
   };
 
-  const handleReset = () => {
-    if (confirm('Reset database to default Archdiocese of Nyeri seed records? Any custom additions will be restored.')) {
-      resetToSeedData();
+  const handleReset = async () => {
+    setIsBusy(true);
+    setImportStatus(null);
+    try {
+      await resetToSeedData();
+      setConfirmReset(false);
       onClose();
+    } catch (err) {
+      setImportStatus(err instanceof Error ? err.message : 'Admin sign-in required to reset database.');
+      setConfirmReset(false);
+    } finally {
+      setIsBusy(false);
     }
   };
 
@@ -89,7 +106,7 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({ isOpen, onClos
           {/* Database Summary */}
           <div className="p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-1.5">
             <span className="text-[10px] uppercase font-bold text-slate-400 block">
-              LOCAL PERSISTENCE STATS
+              SHARED DATABASE STATS
             </span>
             <div className="grid grid-cols-2 gap-2 text-slate-700 font-mono">
               <div>Enrolled Youth: <span className="font-bold text-slate-900">{members.length}</span></div>
@@ -134,17 +151,37 @@ export const DataBackupModal: React.FC<DataBackupModalProps> = ({ isOpen, onClos
 
           {/* Reset */}
           <div className="space-y-1.5 pt-3 border-t border-slate-100">
-            <h4 className="font-semibold text-slate-900">3. Restore Archdiocesan Seed Data</h4>
+            <h4 className="font-semibold text-slate-900">3. Clear Registrations & Reset Deaneries</h4>
             <p className="text-slate-500">
-              Re-populate with all official parishes, deaneries, and initial youth rosters.
+              Clear all registrations and reset the shared database to clean deaneries & parishes. Requires Admin sign-in.
             </p>
-            <button
-              onClick={handleReset}
-              className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-red-50 hover:bg-red-100 text-red-700 font-semibold rounded-lg transition-colors border border-red-200"
-            >
-              <RotateCcw className="w-4 h-4" />
-              <span>Reset to Default Nyeri Archdiocesan Data</span>
-            </button>
+            {!confirmReset ? (
+              <button
+                onClick={() => setConfirmReset(true)}
+                disabled={isBusy}
+                className="w-full flex items-center justify-center gap-1.5 py-2 px-3 bg-red-50 hover:bg-red-100 text-red-700 font-semibold rounded-lg transition-colors border border-red-200 disabled:opacity-60"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Reset Shared Database</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleReset}
+                  disabled={isBusy}
+                  className="flex-1 py-2 px-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg transition-colors disabled:opacity-60"
+                >
+                  {isBusy ? 'Resetting...' : 'Confirm Clear All Records'}
+                </button>
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  disabled={isBusy}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

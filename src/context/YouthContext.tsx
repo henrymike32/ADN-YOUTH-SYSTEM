@@ -1,12 +1,12 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { 
-  YouthMember, 
-  Parish, 
-  Deanery, 
-  ArchdiocesanEvent, 
-  FinancialRemittance, 
-  VocationAspirant, 
-  WelfareCase, 
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import {
+  YouthMember,
+  Parish,
+  Deanery,
+  ArchdiocesanEvent,
+  FinancialRemittance,
+  VocationAspirant,
+  WelfareCase,
   UserRole,
   NiccaStudent,
   ChallengeWeekTeam,
@@ -14,26 +14,19 @@ import {
   MatronPatron,
   SecondarySchoolStudent,
   ParishRegistrationBatch,
-  ParishLeaderAccount
+  ParishLeaderAccount,
 } from '../types';
-import { 
-  SEED_DEANERIES, 
-  SEED_PARISHES, 
-  SEED_MEMBERS, 
-  SEED_EVENTS, 
-  SEED_REMITTANCES, 
-  SEED_VOCATIONS, 
-  SEED_WELFARE 
-} from '../data/seedData';
-import {
-  SEED_NICCA_STUDENTS,
-  SEED_CHALLENGE_WEEK_TEAMS,
-  SEED_CAREER_DAY,
-  SEED_MATRONS_PATRONS,
-  SEED_SECONDARY_SCHOOL_YOUTH,
-  SEED_PARISH_BATCHES,
-  SEED_PARISH_LEADERS
-} from '../data/seedModules';
+import { SEED_DEANERIES, SEED_PARISHES } from '../data/seedData';
+import { apiClient, LoginScope, ServerStatePayload } from '../services/apiClient';
+
+export interface DatabaseStatus {
+  loading: boolean;
+  connected: boolean;
+  dbConfigured: boolean;
+  engine: 'sqlite' | 'mysql' | 'offline';
+  adminConfigured: boolean;
+  error: string | null;
+}
 
 interface YouthContextType {
   members: YouthMember[];
@@ -52,6 +45,16 @@ interface YouthContextType {
   setSelectedParishId: (id: string) => void;
   setCurrentMemberId: (id: string) => void;
 
+  // Database & Auth state
+  dbStatus: DatabaseStatus;
+  adminToken: string | null;
+  leaderToken: string | null;
+  refreshState: () => Promise<void>;
+  setupAdminPassword: (password: string, username?: string) => Promise<void>;
+  loginAdmin: (username: string, password: string) => Promise<void>;
+  logoutAdmin: () => void;
+  loginModuleAccount: (scope: LoginScope, identifier: string, password: string) => Promise<any>;
+
   // New Modules State
   niccaStudents: NiccaStudent[];
   challengeTeams: ChallengeWeekTeam[];
@@ -65,678 +68,449 @@ interface YouthContextType {
   addParishRegistrationBatch: (
     batchData: Omit<ParishRegistrationBatch, 'id' | 'submittedAt' | 'memberIds' | 'totalFee'>,
     names: string[]
-  ) => { batch: ParishRegistrationBatch; newMembers: YouthMember[] };
-  confirmParishBatch: (batchId: string, adminName?: string) => void;
-  confirmIndividualMember: (memberId: string, adminName?: string) => void;
+  ) => Promise<{ batch: ParishRegistrationBatch; newMembers: YouthMember[] }>;
+  confirmParishBatch: (batchId: string, adminName?: string) => Promise<void>;
+  confirmIndividualMember: (memberId: string, adminName?: string) => Promise<void>;
   addMemberToBatch: (
     batchId: string,
     member: { fullName: string; phone?: string; age?: number; gender?: 'Male' | 'Female' }
-  ) => YouthMember;
+  ) => Promise<YouthMember>;
 
-  
   // Member actions
-  addMember: (member: Omit<YouthMember, 'id'>) => YouthMember;
-  updateMember: (id: string, updates: Partial<YouthMember>) => void;
-  deleteMember: (id: string) => void;
+  addMember: (member: Omit<YouthMember, 'id'>) => Promise<YouthMember>;
+  updateMember: (id: string, updates: Partial<YouthMember>) => Promise<void>;
+  deleteMember: (id: string) => Promise<void>;
 
   // Event actions
-  addEvent: (event: Omit<ArchdiocesanEvent, 'id' | 'registeredMemberIds' | 'attendedMemberIds'>) => void;
-  updateEvent: (id: string, updates: Partial<ArchdiocesanEvent>) => void;
-  toggleEventRegistration: (eventId: string, memberId: string) => void;
-  markEventAttendance: (eventId: string, memberId: string) => boolean;
+  addEvent: (event: Omit<ArchdiocesanEvent, 'id' | 'registeredMemberIds' | 'attendedMemberIds'>) => Promise<void>;
+  updateEvent: (id: string, updates: Partial<ArchdiocesanEvent>) => Promise<void>;
+  toggleEventRegistration: (eventId: string, memberId: string) => Promise<void>;
+  markEventAttendance: (eventId: string, memberId: string) => Promise<boolean>;
 
   // Finance actions
-  addRemittance: (remittance: Omit<FinancialRemittance, 'id' | 'receiptNo'>) => void;
-  verifyRemittance: (id: string, verifiedBy: string) => void;
+  addRemittance: (remittance: Omit<FinancialRemittance, 'id' | 'receiptNo'>) => Promise<void>;
+  verifyRemittance: (id: string, verifiedBy: string) => Promise<void>;
 
   // Vocation & Welfare actions
-  addVocation: (vocation: Omit<VocationAspirant, 'id' | 'dateRecorded'>) => void;
-  updateVocationStage: (id: string, stage: VocationAspirant['stage']) => void;
-  addWelfareCase: (welfare: Omit<WelfareCase, 'id' | 'dateFiled'>) => void;
-  updateWelfareStatus: (id: string, status: WelfareCase['status'], amountDisbursed?: number) => void;
+  addVocation: (vocation: Omit<VocationAspirant, 'id' | 'dateRecorded'>) => Promise<void>;
+  updateVocationStage: (id: string, stage: VocationAspirant['stage']) => Promise<void>;
+  addWelfareCase: (welfare: Omit<WelfareCase, 'id' | 'dateFiled'>) => Promise<void>;
+  updateWelfareStatus: (id: string, status: WelfareCase['status'], amountDisbursed?: number) => Promise<void>;
 
   // Parishes
-  addParish: (parish: Omit<Parish, 'id'>) => void;
-  updateParish: (id: string, updates: Partial<Parish>) => void;
+  addParish: (parish: Omit<Parish, 'id'>) => Promise<void>;
+  updateParish: (id: string, updates: Partial<Parish>) => Promise<void>;
 
   // NICCA
-  addNiccaStudent: (student: Omit<NiccaStudent, 'id' | 'registrationDate'>) => NiccaStudent;
-  deleteNiccaStudent: (id: string) => void;
+  addNiccaStudent: (student: Omit<NiccaStudent, 'id' | 'registrationDate'>) => Promise<NiccaStudent>;
+  deleteNiccaStudent: (id: string) => Promise<void>;
 
   // Challenge Week
-  addChallengeTeam: (team: Omit<ChallengeWeekTeam, 'id' | 'registrationDate'>) => void;
-  updateChallengeScore: (id: string, updates: Partial<ChallengeWeekTeam>) => void;
+  addChallengeTeam: (team: Omit<ChallengeWeekTeam, 'id' | 'registrationDate'>) => Promise<ChallengeWeekTeam>;
+  updateChallengeScore: (id: string, updates: Partial<ChallengeWeekTeam>) => Promise<void>;
+  confirmChallengeTeam: (id: string, adminName?: string) => Promise<void>;
+  rejectChallengeTeam: (id: string, reason?: string) => Promise<void>;
+  updateChallengeMemberPhoto: (teamId: string, memberIndex: number, photoDataUrl: string) => Promise<void>;
 
   // Career Day
-  addCareerRegistration: (reg: Omit<CareerDayRegistration, 'id' | 'registeredDate'>) => void;
-  deleteCareerRegistration: (id: string) => void;
+  addCareerRegistration: (reg: Omit<CareerDayRegistration, 'id' | 'registeredDate'>) => Promise<CareerDayRegistration>;
+  deleteCareerRegistration: (id: string) => Promise<void>;
 
   // Matrons and Patrons
-  addMatronPatron: (animator: Omit<MatronPatron, 'id'>) => void;
-  deleteMatronPatron: (id: string) => void;
+  addMatronPatron: (animator: Omit<MatronPatron, 'id'>) => Promise<MatronPatron>;
+  deleteMatronPatron: (id: string) => Promise<void>;
 
   // Secondary School Youth
-  addSecondaryYouth: (student: Omit<SecondarySchoolStudent, 'id' | 'registrationDate'>) => void;
-  deleteSecondaryYouth: (id: string) => void;
+  addSecondaryYouth: (student: Omit<SecondarySchoolStudent, 'id' | 'registrationDate'>) => Promise<void>;
+  deleteSecondaryYouth: (id: string) => Promise<void>;
 
   // System
   exportDataJson: () => string;
-  importDataJson: (jsonString: string) => boolean;
-  resetToSeedData: () => void;
+  importDataJson: (jsonString: string) => Promise<boolean>;
+  resetToSeedData: () => Promise<void>;
 }
 
-const STORAGE_KEY = 'ADN_YOUTH_MANAGEMENT_DATA_V3';
+const LEGACY_STORAGE_KEYS = [
+  'ADN_YOUTH_MANAGEMENT_DATA_V4',
+  'ADN_YOUTH_MANAGEMENT_DATA_V3',
+  'ADN_YOUTH_MANAGEMENT_DATA_V2',
+  'ADN_YOUTH_MANAGEMENT_DATA_V1',
+];
 
 const YouthContext = createContext<YouthContextType | undefined>(undefined);
 
 export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [members, setMembers] = useState<YouthMember[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.members) {
-          return parsed.members.map((m: YouthMember) => ({
-            ...m,
-            approvalStatus: m.approvalStatus || 'Confirmed',
-          }));
-        }
-      }
-    } catch {}
-    return SEED_MEMBERS.map(m => ({ ...m, approvalStatus: m.approvalStatus || 'Confirmed' }));
-  });
+  const [members, setMembers] = useState<YouthMember[]>([]);
+  const [parishes, setParishes] = useState<Parish[]>(SEED_PARISHES);
+  const [deaneries, setDeaneries] = useState<Deanery[]>(SEED_DEANERIES);
+  const [events, setEvents] = useState<ArchdiocesanEvent[]>([]);
+  const [remittances, setRemittances] = useState<FinancialRemittance[]>([]);
+  const [vocations, setVocations] = useState<VocationAspirant[]>([]);
+  const [welfare, setWelfare] = useState<WelfareCase[]>([]);
 
-  const [parishes, setParishes] = useState<Parish[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.parishes) return parsed.parishes;
-      }
-    } catch {}
-    return SEED_PARISHES;
-  });
-
-  const [deaneries, setDeaneries] = useState<Deanery[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.deaneries) return parsed.deaneries;
-      }
-    } catch {}
-    return SEED_DEANERIES;
-  });
-
-  const [events, setEvents] = useState<ArchdiocesanEvent[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.events) return parsed.events;
-      }
-    } catch {}
-    return SEED_EVENTS;
-  });
-
-  const [remittances, setRemittances] = useState<FinancialRemittance[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.remittances) return parsed.remittances;
-      }
-    } catch {}
-    return SEED_REMITTANCES;
-  });
-
-  const [vocations, setVocations] = useState<VocationAspirant[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.vocations) return parsed.vocations;
-      }
-    } catch {}
-    return SEED_VOCATIONS;
-  });
-
-  const [welfare, setWelfare] = useState<WelfareCase[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.welfare) return parsed.welfare;
-      }
-    } catch {}
-    return SEED_WELFARE;
-  });
-
-  // New modules states
-  const [niccaStudents, setNiccaStudents] = useState<NiccaStudent[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.niccaStudents) return parsed.niccaStudents;
-      }
-    } catch {}
-    return SEED_NICCA_STUDENTS;
-  });
-
-  const [challengeTeams, setChallengeTeams] = useState<ChallengeWeekTeam[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.challengeTeams) return parsed.challengeTeams;
-      }
-    } catch {}
-    return SEED_CHALLENGE_WEEK_TEAMS;
-  });
-
-  const [careerRegistrations, setCareerRegistrations] = useState<CareerDayRegistration[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.careerRegistrations) return parsed.careerRegistrations;
-      }
-    } catch {}
-    return SEED_CAREER_DAY;
-  });
-
-  const [matronsPatrons, setMatronsPatrons] = useState<MatronPatron[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.matronsPatrons) return parsed.matronsPatrons;
-      }
-    } catch {}
-    return SEED_MATRONS_PATRONS;
-  });
-
-  const [secondaryYouth, setSecondaryYouth] = useState<SecondarySchoolStudent[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.secondaryYouth) return parsed.secondaryYouth;
-      }
-    } catch {}
-    return SEED_SECONDARY_SCHOOL_YOUTH;
-  });
-
-  const [parishBatches, setParishBatches] = useState<ParishRegistrationBatch[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.parishBatches) return parsed.parishBatches;
-      }
-    } catch {}
-    return SEED_PARISH_BATCHES;
-  });
-
-  const [parishLeaders, setParishLeaders] = useState<ParishLeaderAccount[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.parishLeaders) return parsed.parishLeaders;
-      }
-    } catch {}
-    return SEED_PARISH_LEADERS;
-  });
+  const [niccaStudents, setNiccaStudents] = useState<NiccaStudent[]>([]);
+  const [challengeTeams, setChallengeTeams] = useState<ChallengeWeekTeam[]>([]);
+  const [careerRegistrations, setCareerRegistrations] = useState<CareerDayRegistration[]>([]);
+  const [matronsPatrons, setMatronsPatrons] = useState<MatronPatron[]>([]);
+  const [secondaryYouth, setSecondaryYouth] = useState<SecondarySchoolStudent[]>([]);
+  const [parishBatches, setParishBatches] = useState<ParishRegistrationBatch[]>([]);
+  const [parishLeaders, setParishLeaders] = useState<ParishLeaderAccount[]>([]);
 
   const [currentRole, setCurrentRole] = useState<UserRole>('Archdiocesan Chaplaincy');
   const [selectedDeaneryId, setSelectedDeaneryId] = useState<string>('ALL');
   const [selectedParishId, setSelectedParishId] = useState<string>('ALL');
-  const [currentMemberId, setCurrentMemberId] = useState<string>('ADN-YTH-2026-0001');
+  const [currentMemberId, setCurrentMemberId] = useState<string>('');
 
-  // Sync to localStorage
+  // In-memory session tokens only (never persisted to localStorage/sessionStorage)
+  const [adminToken, setAdminToken] = useState<string | null>(null);
+  const [leaderToken, setLeaderToken] = useState<string | null>(null);
+  const [memberTokens, setMemberTokens] = useState<Record<string, string>>({});
+
+  const [dbStatus, setDbStatus] = useState<DatabaseStatus>({
+    loading: true,
+    connected: false,
+    dbConfigured: false,
+    engine: 'offline',
+    adminConfigured: false,
+    error: null,
+  });
+
+  const applyServerState = useCallback((data: ServerStatePayload) => {
+    setMembers(
+      (data.members || []).map((m) => ({
+        ...m,
+        approvalStatus: m.approvalStatus || 'Confirmed',
+      }))
+    );
+    setParishes(data.parishes && data.parishes.length > 0 ? data.parishes : SEED_PARISHES);
+    setDeaneries(data.deaneries && data.deaneries.length > 0 ? data.deaneries : SEED_DEANERIES);
+    setEvents(data.events || []);
+    setRemittances(data.remittances || []);
+    setVocations(data.vocations || []);
+    setWelfare(data.welfare || []);
+    setNiccaStudents(data.niccaStudents || []);
+    setChallengeTeams(data.challengeTeams || []);
+    setCareerRegistrations(data.careerRegistrations || []);
+    setMatronsPatrons(data.matronsPatrons || []);
+    setSecondaryYouth(data.secondaryYouth || []);
+    setParishBatches(data.parishBatches || []);
+
+    setDbStatus({
+      loading: false,
+      connected: data.dbConfigured !== false,
+      dbConfigured: data.dbConfigured !== false,
+      engine: data.engine || 'sqlite',
+      adminConfigured: Boolean(data.adminConfigured),
+      error: data.dbConfigured === false ? 'MySQL database is not configured yet in api/config.php.' : null,
+    });
+  }, []);
+
+  const refreshState = useCallback(async () => {
+    try {
+      const data = await apiClient.getState();
+      applyServerState(data);
+    } catch (err: any) {
+      setDbStatus((prev) => ({
+        ...prev,
+        loading: false,
+        connected: false,
+        error: err?.message || 'Unable to reach shared database server.',
+      }));
+    }
+  }, [applyServerState]);
+
   useEffect(() => {
     try {
-      const stateToPersist = {
-        members,
-        parishes,
-        deaneries,
-        events,
-        remittances,
-        vocations,
-        welfare,
-        niccaStudents,
-        challengeTeams,
-        careerRegistrations,
-        matronsPatrons,
-        secondaryYouth,
-        parishBatches,
-        parishLeaders,
-      };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToPersist));
-    } catch (e) {
-      console.warn('Could not save to localStorage', e);
+      LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+    } catch {
+      // ignore storage errors
     }
-  }, [
-    members,
-    parishes,
-    deaneries,
-    events,
-    remittances,
-    vocations,
-    welfare,
-    niccaStudents,
-    challengeTeams,
-    careerRegistrations,
-    matronsPatrons,
-    secondaryYouth,
-    parishBatches,
-    parishLeaders,
-  ]);
+    void refreshState();
+  }, [refreshState]);
 
-  const addMember = (memberData: Omit<YouthMember, 'id'>): YouthMember => {
-    const nextNumber = members.length + 1;
-    const formattedNum = String(nextNumber).padStart(4, '0');
-    const newId = `ADN-YTH-2026-${formattedNum}`;
-    const newMember: YouthMember = { ...memberData, id: newId };
-    setMembers(prev => [newMember, ...prev]);
-    return newMember;
+  // ---------------------------------------------------------------------------
+  // Authentication Actions
+  // ---------------------------------------------------------------------------
+  const setupAdminPassword = async (password: string, username: string = 'admin') => {
+    const res = await apiClient.setupAdmin(username, password);
+    setAdminToken(res.token);
+    setDbStatus((prev) => ({ ...prev, adminConfigured: true }));
+    await refreshState();
   };
 
-  const updateMember = (id: string, updates: Partial<YouthMember>) => {
-    setMembers(prev => prev.map(m => (m.id === id ? { ...m, ...updates } : m)));
+  const loginAdmin = async (username: string, password: string) => {
+    const res = await apiClient.loginAdmin(username, password);
+    setAdminToken(res.token);
+    await refreshState();
   };
 
-  const deleteMember = (id: string) => {
-    setMembers(prev => prev.filter(m => m.id !== id));
+  const logoutAdmin = () => {
+    setAdminToken(null);
   };
 
-  const addEvent = (eventData: Omit<ArchdiocesanEvent, 'id' | 'registeredMemberIds' | 'attendedMemberIds'>) => {
-    const newId = `evt-${Date.now()}`;
-    const newEvent: ArchdiocesanEvent = {
-      ...eventData,
-      id: newId,
-      registeredMemberIds: [],
-      attendedMemberIds: [],
-    };
-    setEvents(prev => [newEvent, ...prev]);
-  };
-
-  const updateEvent = (id: string, updates: Partial<ArchdiocesanEvent>) => {
-    setEvents(prev => prev.map(e => (e.id === id ? { ...e, ...updates } : e)));
-  };
-
-  const toggleEventRegistration = (eventId: string, memberId: string) => {
-    setEvents(prev =>
-      prev.map(evt => {
-        if (evt.id !== eventId) return evt;
-        const exists = evt.registeredMemberIds.includes(memberId);
-        return {
-          ...evt,
-          registeredMemberIds: exists
-            ? evt.registeredMemberIds.filter(id => id !== memberId)
-            : [...evt.registeredMemberIds, memberId],
-        };
-      })
-    );
-  };
-
-  const markEventAttendance = (eventId: string, memberId: string): boolean => {
-    let marked = false;
-    setEvents(prev =>
-      prev.map(evt => {
-        if (evt.id !== eventId) return evt;
-        if (!evt.attendedMemberIds.includes(memberId)) {
-          marked = true;
-          return {
-            ...evt,
-            attendedMemberIds: [...evt.attendedMemberIds, memberId],
-            registeredMemberIds: evt.registeredMemberIds.includes(memberId)
-              ? evt.registeredMemberIds
-              : [...evt.registeredMemberIds, memberId],
-          };
-        }
-        return evt;
-      })
-    );
-    return marked;
-  };
-
-  const addRemittance = (remData: Omit<FinancialRemittance, 'id' | 'receiptNo'>) => {
-    const receiptNo = `REC-ADN-2026-${Math.floor(100 + Math.random() * 900)}`;
-    const newRem: FinancialRemittance = {
-      ...remData,
-      id: `rem-${Date.now()}`,
-      receiptNo,
-    };
-    setRemittances(prev => [newRem, ...prev]);
-
-    if (remData.remittanceType === 'Annual Archdiocesan Youth Levy') {
-      setParishes(prev =>
-        prev.map(p =>
-          p.id === remData.parishId
-            ? { ...p, annualLevyPaid: p.annualLevyPaid + remData.amount }
-            : p
-        )
-      );
+  const loginModuleAccount = async (scope: LoginScope, identifier: string, password: string) => {
+    const res = await apiClient.loginModule(scope, identifier, password);
+    if (scope === 'parish-leader') {
+      setLeaderToken(res.token);
+      if (res.leader) {
+        setParishLeaders((prev) => [
+          res.leader!,
+          ...prev.filter((l) => l.leaderPhone !== res.leader!.leaderPhone),
+        ]);
+      }
+      if (res.batch) {
+        setParishBatches((prev) => [
+          res.batch!,
+          ...prev.filter((b) => b.id !== res.batch!.id),
+        ]);
+      }
+    } else if (res.record?.id) {
+      setMemberTokens((prev) => ({ ...prev, [res.record.id]: res.token }));
+      if (scope === 'challenge-week') {
+        setChallengeTeams((prev) => [
+          res.record,
+          ...prev.filter((t) => t.id !== res.record.id),
+        ]);
+      } else if (scope === 'junior-youth') {
+        setMembers((prev) => [
+          res.record,
+          ...prev.filter((m) => m.id !== res.record.id),
+        ]);
+      } else if (scope === 'nicca') {
+        setNiccaStudents((prev) => [
+          res.record,
+          ...prev.filter((s) => s.id !== res.record.id),
+        ]);
+      } else if (scope === 'career-day') {
+        setCareerRegistrations((prev) => [
+          res.record,
+          ...prev.filter((c) => c.id !== res.record.id),
+        ]);
+      } else if (scope === 'matrons-patrons') {
+        setMatronsPatrons((prev) => [
+          res.record,
+          ...prev.filter((a) => a.id !== res.record.id),
+        ]);
+      }
     }
+    return res;
   };
 
-  const verifyRemittance = (id: string, verifiedBy: string) => {
-    setRemittances(prev =>
-      prev.map(r => (r.id === id ? { ...r, status: 'Verified', verifiedBy } : r))
-    );
-  };
-
-  const addVocation = (vocData: Omit<VocationAspirant, 'id' | 'dateRecorded'>) => {
-    const newVoc: VocationAspirant = {
-      ...vocData,
-      id: `voc-${Date.now()}`,
-      dateRecorded: new Date().toISOString().split('T')[0],
-    };
-    setVocations(prev => [newVoc, ...prev]);
-  };
-
-  const updateVocationStage = (id: string, stage: VocationAspirant['stage']) => {
-    setVocations(prev => prev.map(v => (v.id === id ? { ...v, stage } : v)));
-  };
-
-  const addWelfareCase = (welfData: Omit<WelfareCase, 'id' | 'dateFiled'>) => {
-    const newWelf: WelfareCase = {
-      ...welfData,
-      id: `welf-${Date.now()}`,
-      dateFiled: new Date().toISOString().split('T')[0],
-    };
-    setWelfare(prev => [newWelf, ...prev]);
-  };
-
-  const updateWelfareStatus = (id: string, status: WelfareCase['status'], amountDisbursed?: number) => {
-    setWelfare(prev =>
-      prev.map(w =>
-        w.id === id
-          ? {
-              ...w,
-              status,
-              amountDisbursed: amountDisbursed !== undefined ? amountDisbursed : w.amountDisbursed,
-            }
-          : w
-      )
-    );
-  };
-
-  const addParish = (parishData: Omit<Parish, 'id'>) => {
-    const id = `parish-${Date.now()}`;
-    const newParish: Parish = { ...parishData, id };
-    setParishes(prev => [...prev, newParish]);
-  };
-
-  const updateParish = (id: string, updates: Partial<Parish>) => {
-    setParishes(prev => prev.map(p => (p.id === id ? { ...p, ...updates } : p)));
-  };
-
-  // NICCA
-  const addNiccaStudent = (studentData: Omit<NiccaStudent, 'id' | 'registrationDate'>): NiccaStudent => {
-    const nextNum = niccaStudents.length + 1;
-    const newStudent: NiccaStudent = {
-      ...studentData,
-      id: `NICCA-2027-${String(nextNum).padStart(3, '0')}`,
-      registrationDate: new Date().toISOString().split('T')[0],
-      amountPaid: studentData.amountPaid !== undefined ? studentData.amountPaid : 100,
-      paymentStatus: studentData.paymentStatus || 'Paid',
-    };
-    setNiccaStudents(prev => [newStudent, ...prev]);
-    return newStudent;
-  };
-
-  const deleteNiccaStudent = (id: string) => {
-    setNiccaStudents(prev => prev.filter(s => s.id !== id));
-  };
-
-  // Challenge Week
-  const addChallengeTeam = (teamData: Omit<ChallengeWeekTeam, 'id' | 'registrationDate'>) => {
-    const nextNum = challengeTeams.length + 1;
-    const newTeam: ChallengeWeekTeam = {
-      ...teamData,
-      id: `CHALL-2026-${String(nextNum).padStart(2, '0')}`,
-      registrationDate: new Date().toISOString().split('T')[0],
-    };
-    setChallengeTeams(prev => [newTeam, ...prev]);
-  };
-
-  const updateChallengeScore = (id: string, updates: Partial<ChallengeWeekTeam>) => {
-    setChallengeTeams(prev => prev.map(t => (t.id === id ? { ...t, ...updates } : t)));
-  };
-
-  // Career Day
-  const addCareerRegistration = (regData: Omit<CareerDayRegistration, 'id' | 'registeredDate'>) => {
-    const nextNum = careerRegistrations.length + 1;
-    const newReg: CareerDayRegistration = {
-      ...regData,
-      id: `CAR-2026-${String(nextNum).padStart(3, '0')}`,
-      registeredDate: new Date().toISOString().split('T')[0],
-    };
-    setCareerRegistrations(prev => [newReg, ...prev]);
-  };
-
-  const deleteCareerRegistration = (id: string) => {
-    setCareerRegistrations(prev => prev.filter(r => r.id !== id));
-  };
-
-  // Matrons and Patrons
-  const addMatronPatron = (animatorData: Omit<MatronPatron, 'id'>) => {
-    const nextNum = matronsPatrons.length + 1;
-    const newAnimator: MatronPatron = {
-      ...animatorData,
-      id: `ANIM-2026-${String(nextNum).padStart(3, '0')}`,
-    };
-    setMatronsPatrons(prev => [newAnimator, ...prev]);
-  };
-
-  const deleteMatronPatron = (id: string) => {
-    setMatronsPatrons(prev => prev.filter(a => a.id !== id));
-  };
-
-  // Secondary School Youth
-  const addSecondaryYouth = (secData: Omit<SecondarySchoolStudent, 'id' | 'registrationDate'>) => {
-    const nextNum = secondaryYouth.length + 1;
-    const newSec: SecondarySchoolStudent = {
-      ...secData,
-      id: `SEC-2026-${String(nextNum).padStart(3, '0')}`,
-      registrationDate: new Date().toISOString().split('T')[0],
-    };
-    setSecondaryYouth(prev => [newSec, ...prev]);
-  };
-
-  const deleteSecondaryYouth = (id: string) => {
-    setSecondaryYouth(prev => prev.filter(s => s.id !== id));
-  };
-
-  // Parish Youth Batches
-  const addParishRegistrationBatch = (
+  // ---------------------------------------------------------------------------
+  // Member & Parish Batch Actions
+  // ---------------------------------------------------------------------------
+  const addParishRegistrationBatch = async (
     batchData: Omit<ParishRegistrationBatch, 'id' | 'submittedAt' | 'memberIds' | 'totalFee'>,
     names: string[]
-  ): { batch: ParishRegistrationBatch; newMembers: YouthMember[] } => {
-    const batchId = `BATCH-${Date.now()}`;
-    const now = new Date().toISOString().split('T')[0];
-    const count = names.length;
-    const totalFee = count * 100;
-
-    const createdMembers: YouthMember[] = names.map((name, idx) => {
-      const nextNum = members.length + idx + 1;
-      const formattedId = `ADN-PRSH-2026-${String(nextNum).padStart(4, '0')}`;
-      return {
-        id: formattedId,
-        fullName: name.trim(),
-        gender: idx % 2 === 0 ? 'Male' : 'Female',
-        dob: '2004-01-01',
-        age: 21,
-        phone: batchData.leaderPhone,
-        email: `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}@adn-youth.org`,
-        deaneryId: batchData.deaneryId,
-        parishId: batchData.parishId,
-        subParish: batchData.localChurch,
-        movement: 'CYO',
-        occupation: 'Parish Youth Member',
-        sacraments: {
-          baptism: true,
-          firstCommunion: true,
-          confirmation: false,
-          matrimony: false,
-        },
-        ministryGuild: 'Parish Youth Group',
-        leadershipRole: 'Member',
-        emergencyContact: {
-          name: batchData.leaderName,
-          relation: 'Youth Leader',
-          phone: batchData.leaderPhone,
-        },
-        joinedDate: now,
-        status: 'Active',
-        skills: ['Parish Youth'],
-        approvalStatus: 'Pending',
-        registeredByLeaderPhone: batchData.leaderPhone,
-        registeredByLeaderName: batchData.leaderName,
-        localChurch: batchData.localChurch,
-        mpesaRef: batchData.mpesaCode,
-        registrationFee: 100,
-        batchId: batchId,
-      };
-    });
-
-    const newBatch: ParishRegistrationBatch = {
-      ...batchData,
-      id: batchId,
-      memberCount: count,
-      feePerMember: 100,
-      totalFee,
-      approvalStatus: 'Pending',
-      submittedAt: now,
-      memberIds: createdMembers.map((m) => m.id),
+  ): Promise<{ batch: ParishRegistrationBatch; newMembers: YouthMember[] }> => {
+    const res = await apiClient.createParishBatch(batchData, names);
+    setLeaderToken(res.leaderToken);
+    setMembers((prev) => [...res.newMembers, ...prev]);
+    setParishBatches((prev) => [res.batch, ...prev]);
+    const leaderAccount: ParishLeaderAccount = {
+      leaderPhone: res.batch.leaderPhone,
+      leaderName: res.batch.leaderName,
+      password: '',
+      deaneryName: res.batch.deaneryName,
+      parishName: res.batch.parishName,
+      localChurch: res.batch.localChurch,
+      batchId: res.batch.id,
     };
-
-    const newLeader: ParishLeaderAccount = {
-      leaderPhone: batchData.leaderPhone,
-      leaderName: batchData.leaderName,
-      password: batchData.password || 'password123',
-      deaneryName: batchData.deaneryName,
-      parishName: batchData.parishName,
-      localChurch: batchData.localChurch,
-      batchId: batchId,
-    };
-
-    setMembers((prev) => [...createdMembers, ...prev]);
-    setParishBatches((prev) => [newBatch, ...prev]);
-    setParishLeaders((prev) => {
-      const filtered = prev.filter((l) => l.leaderPhone !== batchData.leaderPhone);
-      return [newLeader, ...filtered];
-    });
-
-    return { batch: newBatch, newMembers: createdMembers };
+    setParishLeaders((prev) => [leaderAccount, ...prev.filter((l) => l.leaderPhone !== leaderAccount.leaderPhone)]);
+    return { batch: res.batch, newMembers: res.newMembers };
   };
 
-  const confirmParishBatch = (batchId: string, adminName: string = 'Archdiocesan Youth Chaplaincy') => {
-    const now = new Date().toISOString().split('T')[0];
-    setParishBatches((prev) =>
-      prev.map((b) =>
-        b.id === batchId
-          ? {
-              ...b,
-              approvalStatus: 'Confirmed',
-              paymentStatus: 'Verified',
-              approvedBy: adminName,
-              approvedAt: now,
-            }
-          : b
-      )
-    );
-
+  const confirmParishBatch = async (batchId: string, adminName: string = 'Archdiocesan Youth Chaplaincy') => {
+    const res = await apiClient.confirmParishBatch(batchId, adminName, adminToken);
+    setParishBatches((prev) => prev.map((b) => (b.id === batchId ? res.batch : b)));
     setMembers((prev) =>
-      prev.map((m) =>
-        m.batchId === batchId
-          ? { ...m, approvalStatus: 'Confirmed' }
-          : m
-      )
+      prev.map((m) => (m.batchId === batchId ? { ...m, approvalStatus: 'Confirmed' } : m))
     );
   };
 
-  const confirmIndividualMember = (memberId: string, adminName: string = 'Archdiocesan Youth Chaplaincy') => {
-    setMembers((prev) =>
-      prev.map((m) =>
-        m.id === memberId
-          ? { ...m, approvalStatus: 'Confirmed' }
-          : m
-      )
-    );
+  const confirmIndividualMember = async (memberId: string, adminName: string = 'Archdiocesan Youth Chaplaincy') => {
+    const res = await apiClient.confirmIndividualMember(memberId, adminName, adminToken);
+    setMembers((prev) => prev.map((m) => (m.id === memberId ? res.member : m)));
   };
 
-  const addMemberToBatch = (
+  const addMemberToBatch = async (
     batchId: string,
     memberData: { fullName: string; phone?: string; age?: number; gender?: 'Male' | 'Female' }
-  ): YouthMember => {
-    const batch = parishBatches.find((b) => b.id === batchId);
-    const nextNum = members.length + 1;
-    const formattedId = `ADN-PRSH-2026-${String(nextNum).padStart(4, '0')}`;
-    const now = new Date().toISOString().split('T')[0];
+  ): Promise<YouthMember> => {
+    const res = await apiClient.addMemberToBatch(batchId, memberData, adminToken || leaderToken);
+    setMembers((prev) => [res.member, ...prev]);
+    setParishBatches((prev) => prev.map((b) => (b.id === batchId ? res.batch : b)));
+    return res.member;
+  };
 
-    const newMember: YouthMember = {
-      id: formattedId,
-      fullName: memberData.fullName,
-      gender: memberData.gender || 'Male',
-      dob: '2004-01-01',
-      age: memberData.age || 20,
-      phone: memberData.phone || batch?.leaderPhone || '+254 700 000 000',
-      email: `${memberData.fullName.toLowerCase().replace(/[^a-z0-9]/g, '')}@adn-youth.org`,
-      deaneryId: batch?.deaneryId || 'deanery-tetu',
-      parishId: batch?.parishId || 'parish-tetu',
-      subParish: batch?.localChurch || 'Parish Main',
-      movement: 'CYO',
-      occupation: 'Parish Youth Member',
-      sacraments: {
-        baptism: true,
-        firstCommunion: true,
-        confirmation: false,
-        matrimony: false,
-      },
-      ministryGuild: 'Youth Guild',
-      leadershipRole: 'Member',
-      emergencyContact: {
-        name: batch?.leaderName || 'Youth Leader',
-        relation: 'Youth Leader',
-        phone: batch?.leaderPhone || '+254 700 000 000',
-      },
-      joinedDate: now,
-      status: 'Active',
-      skills: ['Parish Youth'],
-      approvalStatus: 'Pending',
-      registeredByLeaderPhone: batch?.leaderPhone,
-      registeredByLeaderName: batch?.leaderName,
-      localChurch: batch?.localChurch,
-      mpesaRef: batch?.mpesaCode || 'ADDON',
-      registrationFee: 100,
-      batchId: batchId,
-    };
+  const addMember = async (memberData: Omit<YouthMember, 'id'>): Promise<YouthMember> => {
+    const res = await apiClient.createMember(memberData);
+    setMemberTokens((prev) => ({ ...prev, [res.member.id]: res.token }));
+    setMembers((prev) => [res.member, ...prev]);
+    return res.member;
+  };
 
-    setMembers((prev) => [newMember, ...prev]);
+  const updateMember = async (id: string, updates: Partial<YouthMember>) => {
+    const res = await apiClient.updateMember(id, updates, adminToken || leaderToken);
+    setMembers((prev) => prev.map((m) => (m.id === id ? res.member : m)));
+  };
 
-    if (batch) {
-      setParishBatches((prev) =>
-        prev.map((b) =>
-          b.id === batchId
-            ? {
-                ...b,
-                memberCount: b.memberCount + 1,
-                totalFee: (b.memberCount + 1) * 100,
-                memberIds: [...b.memberIds, formattedId],
-              }
-            : b
+  const deleteMember = async (id: string) => {
+    await apiClient.deleteMember(id, adminToken || leaderToken);
+    setMembers((prev) => prev.filter((m) => m.id !== id));
+  };
+
+  // ---------------------------------------------------------------------------
+  // Events, Finance, Vocations, Welfare, Parishes
+  // ---------------------------------------------------------------------------
+  const addEvent = async (eventData: Omit<ArchdiocesanEvent, 'id' | 'registeredMemberIds' | 'attendedMemberIds'>) => {
+    const res = await apiClient.createEvent(eventData, adminToken);
+    setEvents((prev) => [res.event, ...prev]);
+  };
+
+  const updateEvent = async (id: string, updates: Partial<ArchdiocesanEvent>) => {
+    const res = await apiClient.updateEvent(id, updates, adminToken);
+    setEvents((prev) => prev.map((e) => (e.id === id ? res.event : e)));
+  };
+
+  const toggleEventRegistration = async (eventId: string, memberId: string) => {
+    const res = await apiClient.toggleEventRegistration(eventId, memberId);
+    setEvents((prev) => prev.map((evt) => (evt.id === eventId ? res.event : evt)));
+  };
+
+  const markEventAttendance = async (eventId: string, memberId: string): Promise<boolean> => {
+    const res = await apiClient.markEventAttendance(eventId, memberId);
+    setEvents((prev) => prev.map((evt) => (evt.id === eventId ? res.event : evt)));
+    return res.marked;
+  };
+
+  const addRemittance = async (remData: Omit<FinancialRemittance, 'id' | 'receiptNo'>) => {
+    const res = await apiClient.createRemittance(remData);
+    setRemittances((prev) => [res.remittance, ...prev]);
+    if (remData.remittanceType === 'Annual Archdiocesan Youth Levy') {
+      setParishes((prev) =>
+        prev.map((p) =>
+          p.id === remData.parishId ? { ...p, annualLevyPaid: p.annualLevyPaid + remData.amount } : p
         )
       );
     }
-
-    return newMember;
   };
 
+  const verifyRemittance = async (id: string, verifiedBy: string) => {
+    const res = await apiClient.verifyRemittance(id, verifiedBy, adminToken);
+    setRemittances((prev) => prev.map((r) => (r.id === id ? res.remittance : r)));
+  };
+
+  const addVocation = async (vocData: Omit<VocationAspirant, 'id' | 'dateRecorded'>) => {
+    const res = await apiClient.createVocation(vocData);
+    setVocations((prev) => [res.vocation, ...prev]);
+  };
+
+  const updateVocationStage = async (id: string, stage: VocationAspirant['stage']) => {
+    const res = await apiClient.updateVocationStage(id, stage, adminToken);
+    setVocations((prev) => prev.map((v) => (v.id === id ? res.vocation : v)));
+  };
+
+  const addWelfareCase = async (welfData: Omit<WelfareCase, 'id' | 'dateFiled'>) => {
+    const res = await apiClient.createWelfareCase(welfData);
+    setWelfare((prev) => [res.welfareCase, ...prev]);
+  };
+
+  const updateWelfareStatus = async (id: string, status: WelfareCase['status'], amountDisbursed?: number) => {
+    const res = await apiClient.updateWelfareStatus(id, status, amountDisbursed, adminToken);
+    setWelfare((prev) => prev.map((w) => (w.id === id ? res.welfareCase : w)));
+  };
+
+  const addParish = async (parishData: Omit<Parish, 'id'>) => {
+    const res = await apiClient.createParish(parishData, adminToken);
+    setParishes((prev) => [...prev, res.parish]);
+  };
+
+  const updateParish = async (id: string, updates: Partial<Parish>) => {
+    const res = await apiClient.updateParish(id, updates, adminToken);
+    setParishes((prev) => prev.map((p) => (p.id === id ? res.parish : p)));
+  };
+
+  // ---------------------------------------------------------------------------
+  // NICCA, Challenge Week, Career Day, Matrons/Patrons, Secondary Youth
+  // ---------------------------------------------------------------------------
+  const addNiccaStudent = async (studentData: Omit<NiccaStudent, 'id' | 'registrationDate'>): Promise<NiccaStudent> => {
+    const res = await apiClient.createNiccaStudent(studentData);
+    setMemberTokens((prev) => ({ ...prev, [res.student.id]: res.token }));
+    setNiccaStudents((prev) => [res.student, ...prev]);
+    return res.student;
+  };
+
+  const deleteNiccaStudent = async (id: string) => {
+    await apiClient.deleteNiccaStudent(id, adminToken);
+    setNiccaStudents((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const addChallengeTeam = async (teamData: Omit<ChallengeWeekTeam, 'id' | 'registrationDate'>): Promise<ChallengeWeekTeam> => {
+    const res = await apiClient.createChallengeTeam(teamData);
+    setMemberTokens((prev) => ({ ...prev, [res.team.id]: res.token }));
+    setChallengeTeams((prev) => [res.team, ...prev]);
+    return res.team;
+  };
+
+  const updateChallengeScore = async (id: string, updates: Partial<ChallengeWeekTeam>) => {
+    const res = await apiClient.updateChallengeTeam(id, updates, adminToken);
+    setChallengeTeams((prev) => prev.map((t) => (t.id === id ? res.team : t)));
+  };
+
+  const confirmChallengeTeam = async (id: string, adminName: string = 'Archdiocesan Youth Chaplaincy') => {
+    const res = await apiClient.confirmChallengeTeam(id, adminName, adminToken);
+    setChallengeTeams((prev) => prev.map((t) => (t.id === id ? res.team : t)));
+  };
+
+  const rejectChallengeTeam = async (id: string, reason: string = 'M-Pesa payment could not be verified.') => {
+    const res = await apiClient.rejectChallengeTeam(id, reason, adminToken);
+    setChallengeTeams((prev) => prev.map((t) => (t.id === id ? res.team : t)));
+  };
+
+  const updateChallengeMemberPhoto = async (teamId: string, memberIndex: number, photoDataUrl: string) => {
+    const token = adminToken || memberTokens[teamId] || null;
+    const res = await apiClient.uploadChallengePhoto(teamId, memberIndex, photoDataUrl, token);
+    setChallengeTeams((prev) => prev.map((t) => (t.id === teamId ? res.team : t)));
+  };
+
+  const addCareerRegistration = async (regData: Omit<CareerDayRegistration, 'id' | 'registeredDate'>): Promise<CareerDayRegistration> => {
+    const res = await apiClient.createCareerRegistration(regData);
+    setMemberTokens((prev) => ({ ...prev, [res.registration.id]: res.token }));
+    setCareerRegistrations((prev) => [res.registration, ...prev]);
+    return res.registration;
+  };
+
+  const deleteCareerRegistration = async (id: string) => {
+    await apiClient.deleteCareerRegistration(id, adminToken);
+    setCareerRegistrations((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const addMatronPatron = async (animatorData: Omit<MatronPatron, 'id'>): Promise<MatronPatron> => {
+    const res = await apiClient.createMatronPatron(animatorData);
+    setMemberTokens((prev) => ({ ...prev, [res.animator.id]: res.token }));
+    setMatronsPatrons((prev) => [res.animator, ...prev]);
+    return res.animator;
+  };
+
+  const deleteMatronPatron = async (id: string) => {
+    await apiClient.deleteMatronPatron(id, adminToken);
+    setMatronsPatrons((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  const addSecondaryYouth = async (secData: Omit<SecondarySchoolStudent, 'id' | 'registrationDate'>) => {
+    const res = await apiClient.createSecondaryYouth(secData);
+    setSecondaryYouth((prev) => [res.student, ...prev]);
+  };
+
+  const deleteSecondaryYouth = async (id: string) => {
+    await apiClient.deleteSecondaryYouth(id, adminToken);
+    setSecondaryYouth((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  // ---------------------------------------------------------------------------
+  // System Backup / Import / Reset
+  // ---------------------------------------------------------------------------
   const exportDataJson = (): string => {
     const data = {
       exportedAt: new Date().toISOString(),
@@ -755,28 +529,15 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       matronsPatrons,
       secondaryYouth,
       parishBatches,
-      parishLeaders,
     };
     return JSON.stringify(data, null, 2);
   };
 
-  const importDataJson = (jsonString: string): boolean => {
+  const importDataJson = async (jsonString: string): Promise<boolean> => {
     try {
       const parsed = JSON.parse(jsonString);
-      if (parsed.members && Array.isArray(parsed.members)) setMembers(parsed.members);
-      if (parsed.parishes && Array.isArray(parsed.parishes)) setParishes(parsed.parishes);
-      if (parsed.deaneries && Array.isArray(parsed.deaneries)) setDeaneries(parsed.deaneries);
-      if (parsed.events && Array.isArray(parsed.events)) setEvents(parsed.events);
-      if (parsed.remittances && Array.isArray(parsed.remittances)) setRemittances(parsed.remittances);
-      if (parsed.vocations && Array.isArray(parsed.vocations)) setVocations(parsed.vocations);
-      if (parsed.welfare && Array.isArray(parsed.welfare)) setWelfare(parsed.welfare);
-      if (parsed.niccaStudents && Array.isArray(parsed.niccaStudents)) setNiccaStudents(parsed.niccaStudents);
-      if (parsed.challengeTeams && Array.isArray(parsed.challengeTeams)) setChallengeTeams(parsed.challengeTeams);
-      if (parsed.careerRegistrations && Array.isArray(parsed.careerRegistrations)) setCareerRegistrations(parsed.careerRegistrations);
-      if (parsed.matronsPatrons && Array.isArray(parsed.matronsPatrons)) setMatronsPatrons(parsed.matronsPatrons);
-      if (parsed.secondaryYouth && Array.isArray(parsed.secondaryYouth)) setSecondaryYouth(parsed.secondaryYouth);
-      if (parsed.parishBatches && Array.isArray(parsed.parishBatches)) setParishBatches(parsed.parishBatches);
-      if (parsed.parishLeaders && Array.isArray(parsed.parishLeaders)) setParishLeaders(parsed.parishLeaders);
+      const res = await apiClient.importData(parsed, adminToken);
+      applyServerState(res.state);
       return true;
     } catch (e) {
       console.error('Import failed', e);
@@ -784,22 +545,9 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const resetToSeedData = () => {
-    setMembers(SEED_MEMBERS.map(m => ({ ...m, approvalStatus: m.approvalStatus || 'Confirmed' })));
-    setParishes(SEED_PARISHES);
-    setDeaneries(SEED_DEANERIES);
-    setEvents(SEED_EVENTS);
-    setRemittances(SEED_REMITTANCES);
-    setVocations(SEED_VOCATIONS);
-    setWelfare(SEED_WELFARE);
-    setNiccaStudents(SEED_NICCA_STUDENTS);
-    setChallengeTeams(SEED_CHALLENGE_WEEK_TEAMS);
-    setCareerRegistrations(SEED_CAREER_DAY);
-    setMatronsPatrons(SEED_MATRONS_PATRONS);
-    setSecondaryYouth(SEED_SECONDARY_SCHOOL_YOUTH);
-    setParishBatches(SEED_PARISH_BATCHES);
-    setParishLeaders(SEED_PARISH_LEADERS);
-    localStorage.removeItem(STORAGE_KEY);
+  const resetToSeedData = async () => {
+    const res = await apiClient.resetDatabase(adminToken);
+    applyServerState(res.state);
   };
 
   return (
@@ -820,6 +568,14 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setSelectedDeaneryId,
         setSelectedParishId,
         setCurrentMemberId,
+        dbStatus,
+        adminToken,
+        leaderToken,
+        refreshState,
+        setupAdminPassword,
+        loginAdmin,
+        logoutAdmin,
+        loginModuleAccount,
         niccaStudents,
         challengeTeams,
         careerRegistrations,
@@ -850,6 +606,9 @@ export const YouthProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         deleteNiccaStudent,
         addChallengeTeam,
         updateChallengeScore,
+        confirmChallengeTeam,
+        rejectChallengeTeam,
+        updateChallengeMemberPhoto,
         addCareerRegistration,
         deleteCareerRegistration,
         addMatronPatron,

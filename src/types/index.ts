@@ -52,7 +52,7 @@ export interface YouthMember {
   skills: string[];
   avatarUrl?: string;
 
-  // Fields for Parish Registration Workflow
+  // Fields for Parish & Junior Registration Workflow
   approvalStatus?: RegistrationApprovalStatus; // 'Pending' until admin confirms & accepts
   registeredByLeaderPhone?: string;
   registeredByLeaderName?: string;
@@ -60,6 +60,9 @@ export interface YouthMember {
   mpesaRef?: string;
   registrationFee?: number; // 100 KES
   batchId?: string;
+  deaneryName?: string;
+  parishName?: string;
+  password?: string;
 }
 
 export interface ParishRegistrationBatch {
@@ -175,10 +178,12 @@ export interface ChallengeWeekTeam {
   teamName: string;
   registrationType?: 'Individual' | 'Group';
   memberNames?: string[];
+  memberPhotos?: Record<string, string>; // index -> compressed base64 photo
   parishId?: string;
   deaneryId?: string;
   deaneryName: string;
   parishName: string;
+  localChurch?: string;
   teamLeaderName: string;
   teamLeaderPhone: string;
   membersCount: number; // 1 upto 200 persons
@@ -189,7 +194,11 @@ export interface ChallengeWeekTeam {
   totalFee: number;
   paymentOption: 'Mpesa' | 'Cash';
   mpesaCode?: string;
-  paymentStatus: 'Confirmed' | 'Pending Verification';
+  paymentStatus: 'Confirmed' | 'Pending Verification' | 'Rejected';
+  photographyConsent?: boolean;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedReason?: string;
   loginPin: string;
   username?: string;
   password?: string;
@@ -201,14 +210,20 @@ export interface ChallengeWeekTeam {
 export interface CareerDayRegistration {
   id: string;
   fullName: string;
-  gender: 'Male' | 'Female';
+  gender?: 'Male' | 'Female';
   phone: string;
-  email: string;
-  parishId: string;
-  careerField: string; // IT, Healthcare, Agribusiness, Law, Education, Finance, Engineering
-  type: 'Mentor (Professional)' | 'Mentee (Student/Seeker)';
-  currentOrganization: string;
-  skillsOrGoals: string;
+  username?: string;
+  password?: string;
+  school?: string;
+  gradeAttained?: string;
+  desiredCourse?: string;
+  homeAreaParish?: string;
+  email?: string;
+  parishId?: string;
+  careerField?: string; // IT, Healthcare, Agribusiness, Law, Education, Finance, Engineering
+  type?: 'Mentor (Professional)' | 'Mentee (Student/Seeker)';
+  currentOrganization?: string;
+  skillsOrGoals?: string;
   registeredDate: string;
 }
 
@@ -216,16 +231,22 @@ export interface CareerDayRegistration {
 export interface MatronPatron {
   id: string;
   fullName: string;
-  gender: 'Male' | 'Female';
+  gender?: 'Male' | 'Female';
   role: 'Patron' | 'Matron' | 'Youth Animator' | 'Spiritual Director';
-  parishId: string;
-  deaneryId: string;
+  parishId?: string;
+  deaneryId?: string;
+  deaneryName?: string;
+  parishName?: string;
+  localChurch?: string;
   phone: string;
-  email: string;
-  profession: string;
-  yearsOfService: number;
+  password?: string;
+  amountPaid?: number; // 100 KES
+  mpesaCode?: string;
+  email?: string;
+  profession?: string;
+  yearsOfService?: number;
   commissionedDate: string;
-  safeguardingCertified: boolean;
+  safeguardingCertified?: boolean;
   notes?: string;
 }
 

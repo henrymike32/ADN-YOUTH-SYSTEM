@@ -40,34 +40,43 @@ export const EventsView: React.FC = () => {
   const [eventCoordinator, setEventCoordinator] = useState('Rev. Fr. Anthony Mwangi');
   const [eventCoordinatorPhone, setEventCoordinatorPhone] = useState('+254 712 001 002');
   const [eventDescription, setEventDescription] = useState('');
+  const [eventError, setEventError] = useState<string | null>(null);
+  const [isCreatingEvent, setIsCreatingEvent] = useState(false);
 
   const selectedEvent = events.find((e) => e.id === selectedEventId) || events[0];
 
-  const handleCreateEvent = (e: React.FormEvent) => {
+  const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!eventTitle.trim()) return;
 
-    addEvent({
-      title: eventTitle.trim(),
-      theme: eventTheme.trim() || 'Christus Vivit: Standing Firm in Faith',
-      scriptureReference: eventScripture.trim() || '1 Corinthians 16:13',
-      scope: eventScope,
-      venue: eventVenue.trim(),
-      startDate: eventStartDate,
-      endDate: eventEndDate,
-      fee: Number(eventFee) || 0,
-      capacity: Number(eventCapacity) || 500,
-      coordinator: eventCoordinator.trim(),
-      coordinatorPhone: eventCoordinatorPhone.trim(),
-      targetMovements: ['Junior Youth', 'CYO', 'YCA'],
-      status: 'Upcoming',
-      bannerDescription: eventDescription.trim() || 'Diocesan youth spiritual and fellowship gathering.',
-    });
-
-    setShowNewEventModal(false);
+    setEventError(null);
+    setIsCreatingEvent(true);
+    try {
+      await addEvent({
+        title: eventTitle.trim(),
+        theme: eventTheme.trim() || 'Christus Vivit: Standing Firm in Faith',
+        scriptureReference: eventScripture.trim() || '1 Corinthians 16:13',
+        scope: eventScope,
+        venue: eventVenue.trim(),
+        startDate: eventStartDate,
+        endDate: eventEndDate,
+        fee: Number(eventFee) || 0,
+        capacity: Number(eventCapacity) || 500,
+        coordinator: eventCoordinator.trim(),
+        coordinatorPhone: eventCoordinatorPhone.trim(),
+        targetMovements: ['Junior Youth', 'CYO', 'YCA'],
+        status: 'Upcoming',
+        bannerDescription: eventDescription.trim() || 'Diocesan youth spiritual and fellowship gathering.',
+      });
+      setShowNewEventModal(false);
+    } catch (err) {
+      setEventError(err instanceof Error ? err.message : 'Unable to publish gathering.');
+    } finally {
+      setIsCreatingEvent(false);
+    }
   };
 
-  const handleManualCheckIn = (e: React.FormEvent) => {
+  const handleManualCheckIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!checkInMemberId.trim() || !selectedEvent) return;
 
@@ -88,30 +97,36 @@ export const EventsView: React.FC = () => {
       return;
     }
 
-    const wasMarked = markEventAttendance(selectedEvent.id, foundMember.id);
-    
-    // Trigger confetti celebration on check-in
     try {
-      confetti({
-        particleCount: 40,
-        spread: 60,
-        origin: { y: 0.7 },
-        colors: ['#D97706', '#0B1B3D', '#10B981'],
+      const wasMarked = await markEventAttendance(selectedEvent.id, foundMember.id);
+
+      try {
+        confetti({
+          particleCount: 40,
+          spread: 60,
+          origin: { y: 0.7 },
+          colors: ['#D97706', '#0B1B3D', '#10B981'],
+        });
+      } catch {
+        // ignore
+      }
+
+      setCheckInMessage({
+        text: wasMarked
+          ? `Successfully checked in: ${foundMember.fullName} (${foundMember.id}) - Parish: ${
+              parishes.find((p) => p.id === foundMember.parishId)?.name || 'Nyeri'
+            }`
+          : `${foundMember.fullName} was already marked as attended.`,
+        success: true,
       });
-    } catch {
-      // ignore
+
+      setCheckInMemberId('');
+    } catch (err) {
+      setCheckInMessage({
+        text: err instanceof Error ? err.message : 'Unable to record attendance.',
+        success: false,
+      });
     }
-
-    setCheckInMessage({
-      text: wasMarked
-        ? `Successfully checked in: ${foundMember.fullName} (${foundMember.id}) - Parish: ${
-            parishes.find((p) => p.id === foundMember.parishId)?.name || 'Nyeri'
-          }`
-        : `${foundMember.fullName} was already marked as attended.`,
-      success: true,
-    });
-
-    setCheckInMemberId('');
   };
 
   const handlePrintAttendance = () => {
@@ -212,6 +227,13 @@ export const EventsView: React.FC = () => {
         </div>
 
         {/* Right Column: Selected Event Command Center (8 cols) */}
+        {!selectedEvent && (
+          <div className="lg:col-span-8 bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2 shadow-xs">
+            <Calendar className="w-8 h-8 text-slate-400 mx-auto" />
+            <h3 className="text-sm font-bold text-slate-900">No Gatherings Published Yet</h3>
+            <p className="text-xs text-slate-500">Click "Publish New Gathering" above to schedule an event.</p>
+          </div>
+        )}
         {selectedEvent && (
           <div className="lg:col-span-8 space-y-6">
             
@@ -363,7 +385,14 @@ export const EventsView: React.FC = () => {
                             </td>
                             <td className="py-3 px-4 text-right">
                               <button
-                                onClick={() => markEventAttendance(selectedEvent.id, member.id)}
+                                onClick={async () => {
+                                  setEventError(null);
+                                  try {
+                                    await markEventAttendance(selectedEvent.id, member.id);
+                                  } catch (err) {
+                                    setEventError(err instanceof Error ? err.message : 'Unable to update attendance.');
+                                  }
+                                }}
                                 className={`px-2.5 py-1 text-[11px] font-semibold rounded transition-colors ${
                                   isAttended
                                     ? 'text-slate-500 bg-slate-100 hover:bg-slate-200'
@@ -503,6 +532,11 @@ export const EventsView: React.FC = () => {
             </div>
 
             <form onSubmit={handleCreateEvent} className="p-6 space-y-4">
+              {eventError && (
+                <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
+                  {eventError}
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Event Title *
@@ -658,9 +692,10 @@ export const EventsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors"
+                  disabled={isCreatingEvent}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 rounded-lg transition-colors"
                 >
-                  Publish Gathering
+                  {isCreatingEvent ? 'Publishing...' : 'Publish Gathering'}
                 </button>
               </div>
             </form>

@@ -20,7 +20,9 @@ interface SecondaryYouthProps {
 }
 
 export const SecondaryYouthModuleView: React.FC<SecondaryYouthProps> = ({ onBackToHome }) => {
-  const { secondaryYouth, addSecondaryYouth, deleteSecondaryYouth, parishes, deaneries } = useYouth();
+  const { secondaryYouth, addSecondaryYouth, deleteSecondaryYouth, parishes, deaneries, adminToken } = useYouth();
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [formFilter, setFormFilter] = useState('ALL');
@@ -67,25 +69,33 @@ export const SecondaryYouthModuleView: React.FC<SecondaryYouthProps> = ({ onBack
     return matchesSearch && matchesForm;
   });
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim() || !phoneOrParentPhone.trim()) return;
 
-    addSecondaryYouth({
-      fullName: fullName.trim(),
-      gender,
-      schoolName,
-      formLevel,
-      phoneOrParentPhone: phoneOrParentPhone.trim(),
-      parentName: parentName.trim() || 'Parent/Guardian',
-      homeParish,
-      homeDeanery,
-      ycsRole: ycsRole.trim() || 'YCS Member',
-    });
+    setActionError(null);
+    setIsSaving(true);
+    try {
+      await addSecondaryYouth({
+        fullName: fullName.trim(),
+        gender,
+        schoolName,
+        formLevel,
+        phoneOrParentPhone: phoneOrParentPhone.trim(),
+        parentName: parentName.trim() || 'Parent/Guardian',
+        homeParish,
+        homeDeanery,
+        ycsRole: ycsRole.trim() || 'YCS Member',
+      });
 
-    setFullName('');
-    setParentName('');
-    setShowRegisterModal(false);
+      setFullName('');
+      setParentName('');
+      setShowRegisterModal(false);
+    } catch (err: any) {
+      setActionError(err?.message || 'Unable to save student registration.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleExportCSV = () => {
@@ -354,17 +364,23 @@ export const SecondaryYouthModuleView: React.FC<SecondaryYouthProps> = ({ onBack
                   </td>
 
                   <td className="py-3 px-4 text-right">
-                    <button
-                      onClick={() => {
-                        if (confirm(`Remove ${student.fullName} from high school list?`)) {
-                          deleteSecondaryYouth(student.id);
-                        }
-                      }}
-                      className="p-1 text-slate-400 hover:text-red-600 transition-colors"
-                      title="Remove Student"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {adminToken && (
+                      <button
+                        onClick={async () => {
+                          if (confirm(`Remove ${student.fullName} from high school list?`)) {
+                            try {
+                              await deleteSecondaryYouth(student.id);
+                            } catch (err: any) {
+                              setActionError(err?.message || 'Unable to remove student.');
+                            }
+                          }
+                        }}
+                        className="p-1 text-slate-400 hover:text-red-600 transition-colors"
+                        title="Remove Student"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -488,6 +504,13 @@ export const SecondaryYouthModuleView: React.FC<SecondaryYouthProps> = ({ onBack
                 </div>
               </div>
 
+              {actionError && (
+                <div className="p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>{actionError}</span>
+                </div>
+              )}
+
               <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
                 <button
                   type="button"
@@ -498,9 +521,10 @@ export const SecondaryYouthModuleView: React.FC<SecondaryYouthProps> = ({ onBack
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
+                  disabled={isSaving}
+                  className="px-4 py-2 font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50"
                 >
-                  Save Registration
+                  {isSaving ? 'Saving...' : 'Save Registration'}
                 </button>
               </div>
             </form>

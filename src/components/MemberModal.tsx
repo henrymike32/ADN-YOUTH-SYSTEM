@@ -45,6 +45,8 @@ export const MemberModal: React.FC<MemberModalProps> = ({
 
   // Skills
   const [skillsInput, setSkillsInput] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Update form when memberToEdit changes or modal opens
   useEffect(() => {
@@ -127,10 +129,11 @@ export const MemberModal: React.FC<MemberModalProps> = ({
     return Math.max(12, age || 20);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     if (!fullName.trim() || !phone.trim() || !parishId) {
-      alert('Please fill in Full Name, Phone, and Parish.');
+      setFormError('Please fill in Full Name, Phone, and Parish.');
       return;
     }
 
@@ -173,13 +176,19 @@ export const MemberModal: React.FC<MemberModalProps> = ({
       skills: skills.length > 0 ? skills : ['Youth Ministry'],
     };
 
-    if (memberToEdit) {
-      updateMember(memberToEdit.id, payload);
-    } else {
-      addMember(payload);
+    setIsSubmitting(true);
+    try {
+      if (memberToEdit) {
+        await updateMember(memberToEdit.id, payload);
+      } else {
+        await addMember(payload);
+      }
+      onClose();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Unable to save member record.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    onClose();
   };
 
   if (!isOpen) return null;
@@ -208,6 +217,12 @@ export const MemberModal: React.FC<MemberModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+          {formError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+              <span>{formError}</span>
+            </div>
+          )}
           
           {/* Section 1: Demographics */}
           <div>
@@ -589,10 +604,11 @@ export const MemberModal: React.FC<MemberModalProps> = ({
             </button>
             <button
               type="submit"
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
+              disabled={isSubmitting}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 rounded-lg transition-colors shadow-xs"
             >
               <Save className="w-3.5 h-3.5 text-amber-400" />
-              <span>{memberToEdit ? 'Save Changes' : 'Register Member'}</span>
+              <span>{isSubmitting ? 'Saving...' : memberToEdit ? 'Save Changes' : 'Register Member'}</span>
             </button>
           </div>
         </form>

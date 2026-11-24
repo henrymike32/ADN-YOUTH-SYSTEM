@@ -34,7 +34,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   
   const totalRemittancesKES = remittances.reduce((sum, r) => sum + r.amount, 0);
   const totalTargetKES = deaneries.reduce((sum, d) => sum + d.annualTarget, 0);
-  const targetPercentage = Math.min(100, Math.round((totalRemittancesKES / totalTargetKES) * 100));
+  const targetPercentage = totalTargetKES > 0 ? Math.min(100, Math.round((totalRemittancesKES / totalTargetKES) * 100)) : 0;
 
   const confirmedCount = members.filter(m => m.sacraments.confirmation).length;
   const confirmationPct = totalYouth > 0 ? Math.round((confirmedCount / totalYouth) * 100) : 0;

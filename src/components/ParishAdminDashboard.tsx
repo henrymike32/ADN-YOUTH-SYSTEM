@@ -1,9 +1,15 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useYouth } from '../context/YouthContext';
 import { ARCHDIOCESE_DEANERIES_AND_PARISHES } from '../data/archdioceseHierarchy';
 import { OfficialLogo } from './OfficialLogo';
 import { YouthMember } from '../types';
 import confetti from 'canvas-confetti';
+import {
+  downloadChallengeExcelCsv,
+  downloadChallengePdfReport,
+  ChallengeExportRow,
+  ChallengeExportSummary,
+} from '../utils/exportChallengePdf';
 import { 
   Users, 
   CheckCircle2, 
@@ -11,6 +17,7 @@ import {
   Building2, 
   CreditCard, 
   FileText, 
+  FileSpreadsheet,
   Download, 
   Printer, 
   Search, 
@@ -20,7 +27,9 @@ import {
   Phone, 
   AlertCircle, 
   X, 
+  XCircle,
   Layers, 
+  ChevronLeft,
   ChevronRight,
   Church,
   GraduationCap,
@@ -33,7 +42,8 @@ import {
   Award,
   Edit3,
   Trash2,
-  QrCode
+  QrCode,
+  RefreshCw
 } from 'lucide-react';
 
 interface ParishAdminDashboardProps {
@@ -64,11 +74,18 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
     careerRegistrations,
     matronsPatrons,
     secondaryYouth,
+    dbStatus,
+    refreshState,
     confirmParishBatch, 
-    confirmIndividualMember,
+    confirmChallengeTeam,
+    rejectChallengeTeam,
     updateMember,
     deleteMember
   } = useYouth();
+
+  useEffect(() => {
+    void refreshState();
+  }, [refreshState]);
 
   // Active module selected in sidebar
   const [activeModule, setActiveModule] = useState<AdminModuleTab>('parish-youth');
@@ -82,6 +99,8 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
   const [reportParishFilter, setReportParishFilter] = useState('ALL');
   const [reportSearchQuery, setReportSearchQuery] = useState('');
   const [successToast, setSuccessToast] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // --------------------------------------------------------------------------
   // PARISH DRILLDOWN STATE (Requested by User)
@@ -100,6 +119,13 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
   // Modals for Edit & Delete Youth
   const [editingMember, setEditingMember] = useState<YouthMember | null>(null);
   const [memberToDelete, setMemberToDelete] = useState<YouthMember | null>(null);
+  const [challengeStatusFilter, setChallengeStatusFilter] = useState<'ALL' | 'Pending Verification' | 'Confirmed' | 'Rejected'>('ALL');
+  const [challengeDeaneryFilter, setChallengeDeaneryFilter] = useState<string>('ALL');
+  const [challengeMembersPage, setChallengeMembersPage] = useState<number>(1);
+  const [parishMembersPage, setParishMembersPage] = useState<number>(1);
+  const [expandedChallengeId, setExpandedChallengeId] = useState<string | null>(null);
+
+  const MEMBERS_PER_PAGE = 25;
 
   // --------------------------------------------------------------------------
   // COUNTS & METRICS PER MODULE
@@ -116,6 +142,194 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
   const pendingBatches = useMemo(() => {
     return parishBatches.filter(b => b.approvalStatus === 'Pending');
   }, [parishBatches]);
+
+  const pendingChallengeTeams = useMemo(() => {
+    return challengeTeams.filter(t => t.paymentStatus === 'Pending Verification');
+  }, [challengeTeams]);
+
+  // Challenge Week Summary KPIs, Deanery Breakdown & Flattened Members List
+  const challengeSummary: ChallengeExportSummary = useMemo(() => {
+    let totalRegistered = 0;
+    let totalAccepted = 0;
+    let totalPending = 0;
+    let totalRejected = 0;
+    let amountCollected = 0;
+    let totalExpectedAmount = 0;
+
+    challengeTeams.forEach((t) => {
+      const count = t.membersCount || (t.memberNames?.length || 1);
+      const fee = t.totalFee || count * (t.feePerPerson || 1000);
+      totalRegistered += count;
+      totalExpectedAmount += fee;
+
+      if (t.paymentStatus === 'Confirmed') {
+        totalAccepted += count;
+        amountCollected += fee;
+      } else if (t.paymentStatus === 'Rejected') {
+        totalRejected += count;
+      } else {
+        totalPending += count;
+      }
+    });
+
+    return {
+      totalRegistered,
+      totalAccepted,
+      totalPending,
+      totalRejected,
+      amountCollected,
+      totalExpectedAmount,
+    };
+  }, [challengeTeams]);
+
+  const challengeDeaneryStats = useMemo(() => {
+    const map = new Map<string, {
+      deaneryName: string;
+      submissions: number;
+      registered: number;
+      accepted: number;
+      pending: number;
+      rejected: number;
+      collectedAmount: number;
+      expectedAmount: number;
+    }>();
+
+    ARCHDIOCESE_DEANERIES_AND_PARISHES.forEach((d) => {
+      map.set(d.deanery.toLowerCase(), {
+        deaneryName: d.deanery,
+        submissions: 0,
+        registered: 0,
+        accepted: 0,
+        pending: 0,
+        rejected: 0,
+        collectedAmount: 0,
+        expectedAmount: 0,
+      });
+    });
+
+    challengeTeams.forEach((t) => {
+      const rawDeanery = (t.deaneryName || 'Other').trim();
+      const key = rawDeanery.toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, {
+          deaneryName: rawDeanery,
+          submissions: 0,
+          registered: 0,
+          accepted: 0,
+          pending: 0,
+          rejected: 0,
+          collectedAmount: 0,
+          expectedAmount: 0,
+        });
+      }
+      const entry = map.get(key)!;
+      const count = t.membersCount || (t.memberNames?.length || 1);
+      const fee = t.totalFee || count * (t.feePerPerson || 1000);
+      entry.submissions += 1;
+      entry.registered += count;
+      entry.expectedAmount += fee;
+      if (t.paymentStatus === 'Confirmed') {
+        entry.accepted += count;
+        entry.collectedAmount += fee;
+      } else if (t.paymentStatus === 'Rejected') {
+        entry.rejected += count;
+      } else {
+        entry.pending += count;
+      }
+    });
+
+    return Array.from(map.values());
+  }, [challengeTeams]);
+
+  const allChallengeMemberRows: ChallengeExportRow[] = useMemo(() => {
+    const rows: ChallengeExportRow[] = [];
+
+    challengeTeams.forEach((team) => {
+      const hasExplicitNames = team.memberNames && team.memberNames.length > 0;
+      const count = hasExplicitNames
+        ? team.memberNames!.length
+        : Math.max(1, team.membersCount || 1);
+      const feePerMember = team.feePerPerson || (count > 0 ? Math.round((team.totalFee || count * 1000) / count) : 1000);
+      const regType = team.registrationType || (count === 1 ? 'Individual' : 'Group');
+      const localChurch = team.localChurch || team.parishName;
+
+      for (let i = 0; i < count; i++) {
+        const code = count === 1 ? team.id : `${team.id}-${String(i + 1).padStart(2, '0')}`;
+        const fullName = hasExplicitNames
+          ? team.memberNames![i]
+          : i === 0
+            ? `${team.teamLeaderName} (Leader)`
+            : `${team.teamName} - Member #${i + 1}`;
+
+        rows.push({
+          code,
+          fullName,
+          teamName: team.teamName,
+          registrationType: regType,
+          deaneryName: team.deaneryName,
+          parishName: team.parishName,
+          localChurch,
+          phone: team.teamLeaderPhone,
+          fee: feePerMember,
+          mpesaCode: team.mpesaCode || 'CASH',
+          status: team.paymentStatus,
+          registrationDate: team.registrationDate,
+        });
+      }
+    });
+
+    return rows;
+  }, [challengeTeams]);
+
+  const filteredChallengeTeams = useMemo(() => {
+    const q = moduleSearchTerm.toLowerCase();
+    return challengeTeams.filter((t) => {
+      const matchesStatus =
+        challengeStatusFilter === 'ALL' || t.paymentStatus === challengeStatusFilter;
+      const matchesDeanery =
+        challengeDeaneryFilter === 'ALL' ||
+        (t.deaneryName || '').toLowerCase() === challengeDeaneryFilter.toLowerCase();
+      const matchesQuery =
+        !q ||
+        t.id.toLowerCase().includes(q) ||
+        t.teamName.toLowerCase().includes(q) ||
+        t.teamLeaderName.toLowerCase().includes(q) ||
+        t.parishName.toLowerCase().includes(q) ||
+        t.deaneryName.toLowerCase().includes(q) ||
+        (t.localChurch || '').toLowerCase().includes(q) ||
+        (t.mpesaCode || '').toLowerCase().includes(q) ||
+        (t.memberNames || []).some((n) => n.toLowerCase().includes(q));
+      return matchesStatus && matchesDeanery && matchesQuery;
+    });
+  }, [challengeTeams, challengeStatusFilter, challengeDeaneryFilter, moduleSearchTerm]);
+
+  const filteredChallengeMembers = useMemo(() => {
+    const q = moduleSearchTerm.toLowerCase();
+    return allChallengeMemberRows.filter((row) => {
+      const matchesStatus =
+        challengeStatusFilter === 'ALL' || row.status === challengeStatusFilter;
+      const matchesDeanery =
+        challengeDeaneryFilter === 'ALL' ||
+        row.deaneryName.toLowerCase() === challengeDeaneryFilter.toLowerCase();
+      const matchesQuery =
+        !q ||
+        row.code.toLowerCase().includes(q) ||
+        row.fullName.toLowerCase().includes(q) ||
+        row.teamName.toLowerCase().includes(q) ||
+        row.parishName.toLowerCase().includes(q) ||
+        row.deaneryName.toLowerCase().includes(q) ||
+        row.localChurch.toLowerCase().includes(q) ||
+        row.mpesaCode.toLowerCase().includes(q);
+      return matchesStatus && matchesDeanery && matchesQuery;
+    });
+  }, [allChallengeMemberRows, challengeStatusFilter, challengeDeaneryFilter, moduleSearchTerm]);
+
+  const totalChallengePages = Math.max(1, Math.ceil(filteredChallengeMembers.length / MEMBERS_PER_PAGE));
+  const safeChallengePage = Math.min(challengeMembersPage, totalChallengePages);
+  const paginatedChallengeMembers = useMemo(() => {
+    const start = (safeChallengePage - 1) * MEMBERS_PER_PAGE;
+    return filteredChallengeMembers.slice(start, start + MEMBERS_PER_PAGE);
+  }, [filteredChallengeMembers, safeChallengePage]);
 
   // Sidebar Groups Configuration
   const groupsSidebar = [
@@ -150,9 +364,10 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
     {
       id: 'challenge-week' as AdminModuleTab,
       title: 'Challenge Week',
-      sub: 'Teams, Passes & Scores',
+      sub: 'Teams, Passes & Approvals',
       icon: Trophy,
-      count: challengeTeams.length,
+      count: challengeSummary.totalRegistered,
+      pendingCount: pendingChallengeTeams.length,
       accent: 'text-amber-700 bg-amber-50 border-amber-200',
       activeBg: 'bg-slate-900 text-amber-400',
     },
@@ -206,14 +421,18 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
     activeDeaneryParishes.forEach(d => {
       d.parishes.forEach(pName => {
         const pMembers = members.filter(m => {
+          if (m.movement === 'Junior Youth') return false;
           const mParish = parishes.find(p => p.id === m.parishId);
-          const matchParish = (mParish?.name || '').toLowerCase() === pName.toLowerCase() ||
+          const batch = parishBatches.find(b => b.id === m.batchId);
+          const resolvedParish = (m.parishName || batch?.parishName || mParish?.name || '').toLowerCase();
+          const matchParish = resolvedParish === pName.toLowerCase() ||
                               (m.parishId || '').toLowerCase().includes(pName.toLowerCase()) ||
                               (m.localChurch || '').toLowerCase().includes(pName.toLowerCase());
           
           const mDeanery = deaneries.find(dean => dean.id === m.deaneryId);
+          const resolvedDeanery = (m.deaneryName || batch?.deaneryName || mDeanery?.name || '').toLowerCase();
           const matchDeanery = selectedDeaneryFilter === 'ALL' ||
-                               (mDeanery?.name || '').toLowerCase().includes(d.deanery.toLowerCase());
+                               resolvedDeanery.includes(d.deanery.toLowerCase());
 
           return matchParish && matchDeanery;
         });
@@ -236,7 +455,7 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
     });
 
     return list;
-  }, [activeDeaneryParishes, members, parishes, deaneries, selectedDeaneryFilter, parishSearchTerm]);
+  }, [activeDeaneryParishes, members, parishes, deaneries, parishBatches, selectedDeaneryFilter, parishSearchTerm]);
 
   // Members belonging to the selected parish
   const selectedParishYouths = useMemo(() => {
@@ -252,6 +471,7 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
       const batch = parishBatches.find((b) => b.id === m.batchId);
 
       const matchParish =
+        (m.parishName || '').toLowerCase() === pName ||
         (mParish?.name || '').toLowerCase() === pName ||
         (m.parishId || '').toLowerCase().includes(pName) ||
         (m.localChurch || '').toLowerCase().includes(pName) ||
@@ -260,6 +480,7 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
 
       const matchDeanery =
         !m.deaneryId ||
+        (m.deaneryName || '').toLowerCase().includes(dName) ||
         (mDeanery?.name || '').toLowerCase().includes(dName) ||
         (m.deaneryId || '').toLowerCase().includes(dName) ||
         (batch && batch.deaneryName.toLowerCase() === dName);
@@ -291,59 +512,100 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
     });
   }, [selectedParishYouths, parishMemberSearch, statusFilter]);
 
-  // Batch Approval Handlers
-  const handleConfirmBatch = (batchId: string, parishName: string, count: number) => {
-    confirmParishBatch(batchId, 'Archdiocesan Youth Chaplaincy');
-    confetti({
-      particleCount: 70,
-      spread: 60,
-      origin: { y: 0.6 }
-    });
-    setSuccessToast(`Successfully approved and accepted ${count} youth members from ${parishName}!`);
-    setTimeout(() => setSuccessToast(null), 4000);
+  const totalParishPages = Math.max(1, Math.ceil(filteredParishYouths.length / MEMBERS_PER_PAGE));
+  const safeParishPage = Math.min(parishMembersPage, totalParishPages);
+  const paginatedParishYouths = useMemo(() => {
+    const start = (safeParishPage - 1) * MEMBERS_PER_PAGE;
+    return filteredParishYouths.slice(start, start + MEMBERS_PER_PAGE);
+  }, [filteredParishYouths, safeParishPage]);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    setActionError(null);
+    try {
+      await refreshState();
+      setSuccessToast('Latest registrations loaded from the shared database.');
+      setTimeout(() => setSuccessToast(null), 3000);
+    } catch (err: any) {
+      setActionError(err?.message || 'Unable to refresh database records.');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
-  const handleConfirmAllPending = () => {
-    pendingBatches.forEach(b => {
-      confirmParishBatch(b.id, 'Archdiocesan Youth Chaplaincy');
-    });
-    confetti({
-      particleCount: 120,
-      spread: 80,
-      origin: { y: 0.6 }
-    });
-    setSuccessToast(`All pending youth registrations across the Archdiocese have been confirmed and accepted!`);
-    setTimeout(() => setSuccessToast(null), 5000);
+  // Batch Approval Handlers
+  const handleConfirmBatch = async (batchId: string, parishName: string, count: number) => {
+    setActionError(null);
+    try {
+      await confirmParishBatch(batchId, 'Archdiocesan Youth Chaplaincy');
+      confetti({
+        particleCount: 70,
+        spread: 60,
+        origin: { y: 0.6 }
+      });
+      setSuccessToast(`Successfully approved and accepted ${count} youth members from ${parishName}!`);
+      setTimeout(() => setSuccessToast(null), 4000);
+    } catch (err: any) {
+      setActionError(err?.message || 'Unable to approve parish batch.');
+    }
+  };
+
+  const handleConfirmAllPending = async () => {
+    setActionError(null);
+    try {
+      for (const b of pendingBatches) {
+        await confirmParishBatch(b.id, 'Archdiocesan Youth Chaplaincy');
+      }
+      confetti({
+        particleCount: 120,
+        spread: 80,
+        origin: { y: 0.6 }
+      });
+      setSuccessToast(`All pending youth registrations across the Archdiocese have been confirmed and accepted!`);
+      setTimeout(() => setSuccessToast(null), 5000);
+    } catch (err: any) {
+      setActionError(err?.message || 'Unable to confirm all pending batches.');
+    }
   };
 
   // Save edited youth member
-  const handleSaveEditMember = (e: React.FormEvent) => {
+  const handleSaveEditMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMember) return;
 
-    updateMember(editingMember.id, {
-      fullName: editingMember.fullName.trim(),
-      phone: editingMember.phone.trim(),
-      registeredByLeaderPhone: editingMember.registeredByLeaderPhone?.trim() || editingMember.phone.trim(),
-      localChurch: editingMember.localChurch?.trim(),
-      subParish: editingMember.localChurch?.trim(),
-      age: Number(editingMember.age) || 20,
-      gender: editingMember.gender,
-      approvalStatus: editingMember.approvalStatus,
-    });
+    setActionError(null);
+    try {
+      await updateMember(editingMember.id, {
+        fullName: editingMember.fullName.trim(),
+        phone: editingMember.phone.trim(),
+        registeredByLeaderPhone: editingMember.registeredByLeaderPhone?.trim() || editingMember.phone.trim(),
+        localChurch: editingMember.localChurch?.trim(),
+        subParish: editingMember.localChurch?.trim(),
+        age: Number(editingMember.age) || 20,
+        gender: editingMember.gender,
+        approvalStatus: editingMember.approvalStatus,
+      });
 
-    setSuccessToast(`Updated details for ${editingMember.fullName} successfully!`);
-    setEditingMember(null);
-    setTimeout(() => setSuccessToast(null), 4000);
+      setSuccessToast(`Updated details for ${editingMember.fullName} successfully!`);
+      setEditingMember(null);
+      setTimeout(() => setSuccessToast(null), 4000);
+    } catch (err: any) {
+      setActionError(err?.message || 'Unable to save member updates.');
+    }
   };
 
   // Delete youth member
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!memberToDelete) return;
-    deleteMember(memberToDelete.id);
-    setSuccessToast(`Youth member ${memberToDelete.fullName} (${memberToDelete.id}) was deleted from the registry.`);
-    setMemberToDelete(null);
-    setTimeout(() => setSuccessToast(null), 4000);
+    setActionError(null);
+    try {
+      await deleteMember(memberToDelete.id);
+      setSuccessToast(`Youth member ${memberToDelete.fullName} (${memberToDelete.id}) was deleted from the registry.`);
+      setMemberToDelete(null);
+      setTimeout(() => setSuccessToast(null), 4000);
+    } catch (err: any) {
+      setActionError(err?.message || 'Unable to delete youth member.');
+    }
   };
 
   // --------------------------------------------------------------------------
@@ -356,8 +618,8 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
       const mDeanery = deaneries.find((d) => d.id === m.deaneryId);
       const batch = parishBatches.find((b) => b.id === m.batchId);
 
-      const parishName = mParish?.name || batch?.parishName || m.parishId || 'Parish Center';
-      const deaneryName = mDeanery?.name || batch?.deaneryName || 'Nyeri Central';
+      const parishName = m.parishName || batch?.parishName || mParish?.name || m.parishId || 'Parish Center';
+      const deaneryName = m.deaneryName || batch?.deaneryName || mDeanery?.name || 'Nyeri Central';
       const localChurch = m.localChurch || m.subParish || 'Parish Center';
       const phoneUsed = m.phone || m.registeredByLeaderPhone || 'N/A';
 
@@ -499,6 +761,31 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
       
+      {/* Database configuration or action error alert */}
+      {!dbStatus.loading && !dbStatus.dbConfigured && (
+        <div className="p-4 bg-amber-50 border border-amber-300 text-amber-950 rounded-xl flex items-start gap-2.5 text-xs">
+          <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-bold">Shared Database Setup Required on Hosting</div>
+            <p className="mt-0.5">
+              Create <code className="font-mono font-bold">api/config.php</code> from <code className="font-mono font-bold">api/config.example.php</code> and import <code className="font-mono font-bold">api/schema.sql</code> in cPanel phpMyAdmin so registrations sync across all devices.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="p-4 bg-red-50 border border-red-200 text-red-800 rounded-xl flex items-center justify-between text-xs font-semibold">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button onClick={() => setActionError(null)} className="text-red-600 hover:text-red-800 cursor-pointer">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {successToast && (
         <div className="p-4 bg-emerald-600 text-white rounded-xl shadow-lg flex items-center justify-between text-xs font-semibold animate-in slide-in-from-top-2 duration-300">
@@ -548,6 +835,16 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl transition-all shadow-xs cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-600 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span>{isRefreshing ? 'Refreshing...' : 'Refresh List'}</span>
+          </button>
+
           <button
             onClick={() => setIsReportModalOpen(true)}
             className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl transition-all shadow-xs cursor-pointer"
@@ -615,6 +912,8 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                     onClick={() => {
                       setActiveModule(group.id);
                       setModuleSearchTerm('');
+                      setChallengeMembersPage(1);
+                      setParishMembersPage(1);
                       setSelectedParishDetail(null); // Reset drilldown when switching group
                     }}
                     className={`w-full text-left p-3 rounded-xl border transition-all duration-200 flex items-center justify-between gap-3 cursor-pointer ${
@@ -873,7 +1172,10 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                       <input
                         type="text"
                         value={parishMemberSearch}
-                        onChange={(e) => setParishMemberSearch(e.target.value)}
+                        onChange={(e) => {
+                          setParishMemberSearch(e.target.value);
+                          setParishMembersPage(1);
+                        }}
                         placeholder="Search by name, unique code, phone, local church..."
                         className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
                       />
@@ -884,7 +1186,10 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                       <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-50 text-[11px] font-semibold">
                         <button
                           type="button"
-                          onClick={() => setStatusFilter('ALL')}
+                          onClick={() => {
+                            setStatusFilter('ALL');
+                            setParishMembersPage(1);
+                          }}
                           className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
                             statusFilter === 'ALL' ? 'bg-white shadow-xs text-slate-900 font-bold' : 'text-slate-600'
                           }`}
@@ -893,7 +1198,10 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => setStatusFilter('Confirmed')}
+                          onClick={() => {
+                            setStatusFilter('Confirmed');
+                            setParishMembersPage(1);
+                          }}
                           className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
                             statusFilter === 'Confirmed' ? 'bg-white shadow-xs text-emerald-800 font-bold' : 'text-slate-600'
                           }`}
@@ -902,7 +1210,10 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                         </button>
                         <button
                           type="button"
-                          onClick={() => setStatusFilter('Pending')}
+                          onClick={() => {
+                            setStatusFilter('Pending');
+                            setParishMembersPage(1);
+                          }}
                           className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
                             statusFilter === 'Pending' ? 'bg-white shadow-xs text-amber-800 font-bold' : 'text-slate-600'
                           }`}
@@ -929,7 +1240,7 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {filteredParishYouths.length === 0 ? (
+                        {paginatedParishYouths.length === 0 ? (
                           <tr>
                             <td colSpan={8} className="py-8 text-center text-slate-500">
                               <Users className="w-8 h-8 text-slate-300 mx-auto mb-1.5" />
@@ -938,7 +1249,7 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                             </td>
                           </tr>
                         ) : (
-                          filteredParishYouths.map((member) => {
+                          paginatedParishYouths.map((member) => {
                             const isPending = member.approvalStatus === 'Pending';
                             const phoneUsed = member.phone || member.registeredByLeaderPhone || 'N/A';
                             const localChurch = member.localChurch || member.subParish || 'Parish Center';
@@ -1035,6 +1346,38 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                     </table>
                   </div>
 
+                  {/* Pagination Footer (25 per page) */}
+                  {filteredParishYouths.length > MEMBERS_PER_PAGE && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 text-xs text-slate-600">
+                      <span>
+                        Showing <strong>{(safeParishPage - 1) * MEMBERS_PER_PAGE + 1}</strong>–
+                        <strong>{Math.min(safeParishPage * MEMBERS_PER_PAGE, filteredParishYouths.length)}</strong> of{' '}
+                        <strong>{filteredParishYouths.length}</strong> members · Page <strong>{safeParishPage}</strong> of{' '}
+                        <strong>{totalParishPages}</strong>
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={safeParishPage <= 1}
+                          onClick={() => setParishMembersPage((p) => Math.max(1, p - 1))}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 font-semibold cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          <span>Prev</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={safeParishPage >= totalParishPages}
+                          onClick={() => setParishMembersPage((p) => Math.min(totalParishPages, p + 1))}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 font-semibold cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          <span>Next Page</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               ) : (
                 /* Deanery and Parish Breakdown Table (Default Overview) */
@@ -1098,7 +1441,10 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                         {parishStats.map((stat, idx) => (
                           <tr 
                             key={idx} 
-                            onClick={() => setSelectedParishDetail({ parishName: stat.parishName, deaneryName: stat.deaneryName })}
+                            onClick={() => {
+                              setSelectedParishDetail({ parishName: stat.parishName, deaneryName: stat.deaneryName });
+                              setParishMembersPage(1);
+                            }}
                             className="hover:bg-emerald-50/50 cursor-pointer group transition-colors"
                           >
                             <td className="py-2.5 px-3 font-bold text-slate-900 group-hover:text-emerald-800 flex items-center gap-1.5">
@@ -1174,34 +1520,52 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px]">
                       <th className="py-2.5 px-3">Unique Code</th>
                       <th className="py-2.5 px-3">Full Name</th>
-                      <th className="py-2.5 px-3">Parish & Church</th>
-                      <th className="py-2.5 px-3">Age & Gender</th>
-                      <th className="py-2.5 px-3">Sacraments</th>
+                      <th className="py-2.5 px-3">Deanery / Parish / Local Church</th>
+                      <th className="py-2.5 px-3">Phone &amp; M-Pesa</th>
                       <th className="py-2.5 px-3">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {juniorYouthList
-                      .filter(m => !moduleSearchTerm || m.fullName.toLowerCase().includes(moduleSearchTerm.toLowerCase()) || m.id.toLowerCase().includes(moduleSearchTerm.toLowerCase()))
+                      .filter(m => {
+                        if (!moduleSearchTerm) return true;
+                        const q = moduleSearchTerm.toLowerCase();
+                        return (
+                          (m.fullName || '').toLowerCase().includes(q) ||
+                          (m.id || '').toLowerCase().includes(q) ||
+                          (m.phone || '').toLowerCase().includes(q) ||
+                          (m.deaneryName || '').toLowerCase().includes(q) ||
+                          (m.parishName || '').toLowerCase().includes(q) ||
+                          (m.localChurch || m.subParish || '').toLowerCase().includes(q) ||
+                          (m.mpesaRef || '').toLowerCase().includes(q)
+                        );
+                      })
                       .map((member) => (
                         <tr key={member.id} className="hover:bg-slate-50">
                           <td className="py-2.5 px-3 font-mono font-bold text-sky-800">{member.id}</td>
                           <td className="py-2.5 px-3 font-bold text-slate-900">{member.fullName}</td>
                           <td className="py-2.5 px-3 text-slate-600">
-                            <div>{member.subParish || member.localChurch || 'Parish Center'}</div>
-                            <div className="text-[10px] text-slate-400">{member.parishId}</div>
+                            <div className="font-semibold text-slate-800">{member.localChurch || member.subParish || 'Parish Center'}</div>
+                            <div className="text-[10px] text-slate-500">
+                              {member.parishName || member.parishId}
+                              {member.deaneryName ? ` · ${member.deaneryName}` : ''}
+                            </div>
                           </td>
-                          <td className="py-2.5 px-3 text-slate-600 font-mono">
-                            {member.age} yrs · {member.gender}
+                          <td className="py-2.5 px-3 text-slate-700 font-mono text-[11px]">
+                            <div>{member.phone || '—'}</div>
+                            <div className="text-[10px] text-emerald-700 font-semibold">
+                              KSh {member.registrationFee || 100}{member.mpesaRef ? ` · ${member.mpesaRef}` : ''}
+                            </div>
                           </td>
                           <td className="py-2.5 px-3">
-                            <span className="text-[10px] font-semibold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">
-                              {member.sacraments.confirmation ? 'Confirmed' : 'Baptized'}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded">
-                              Active
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                              member.approvalStatus === 'Pending'
+                                ? 'text-amber-800 bg-amber-50'
+                                : member.approvalStatus === 'Rejected'
+                                  ? 'text-red-800 bg-red-50'
+                                  : 'text-emerald-800 bg-emerald-50'
+                            }`}>
+                              {member.approvalStatus || 'Active'}
                             </span>
                           </td>
                         </tr>
@@ -1246,27 +1610,45 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px]">
                       <th className="py-2.5 px-3">Student Name</th>
                       <th className="py-2.5 px-3">Institution / Campus</th>
-                      <th className="py-2.5 px-3">Program of Study</th>
-                      <th className="py-2.5 px-3">Campus Ministry Role</th>
-                      <th className="py-2.5 px-3">Home Parish</th>
-                      <th className="py-2.5 px-3">Contact</th>
+                      <th className="py-2.5 px-3">Phone</th>
+                      <th className="py-2.5 px-3">Registration / M-Pesa</th>
+                      <th className="py-2.5 px-3">Course / Home Parish</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {niccaStudents
-                      .filter(s => !moduleSearchTerm || s.fullName.toLowerCase().includes(moduleSearchTerm.toLowerCase()) || s.institution.toLowerCase().includes(moduleSearchTerm.toLowerCase()))
+                      .filter(s => {
+                        if (!moduleSearchTerm) return true;
+                        const q = moduleSearchTerm.toLowerCase();
+                        return (
+                          (s.fullName || '').toLowerCase().includes(q) ||
+                          (s.institution || '').toLowerCase().includes(q) ||
+                          (s.phone || '').toLowerCase().includes(q) ||
+                          (s.mpesaCode || '').toLowerCase().includes(q) ||
+                          (s.course || '').toLowerCase().includes(q) ||
+                          (s.homeParish || '').toLowerCase().includes(q)
+                        );
+                      })
                       .map((student) => (
                         <tr key={student.id} className="hover:bg-slate-50">
-                          <td className="py-2.5 px-3 font-bold text-slate-900">{student.fullName}</td>
-                          <td className="py-2.5 px-3 font-semibold text-red-800">{student.institution}</td>
-                          <td className="py-2.5 px-3 text-slate-600">{student.course} ({student.yearOfStudy})</td>
                           <td className="py-2.5 px-3">
-                            <span className="text-[10px] font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">
-                              {student.campusMinistryRole}
-                            </span>
+                            <div className="font-bold text-slate-900">{student.fullName}</div>
+                            <div className="text-[10px] font-mono text-slate-400">{student.id}</div>
                           </td>
-                          <td className="py-2.5 px-3 text-slate-600">{student.homeParish}</td>
+                          <td className="py-2.5 px-3 font-semibold text-red-800">{student.institution}</td>
                           <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700">{student.phone}</td>
+                          <td className="py-2.5 px-3">
+                            <div className="font-bold text-emerald-700">KSh {student.amountPaid ?? 100}</div>
+                            <div className="text-[10px] font-mono text-slate-500">{student.mpesaCode || student.paymentStatus || 'Paid'}</div>
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600">
+                            <div>
+                              {student.course && student.course !== 'General'
+                                ? `${student.course}${student.yearOfStudy ? ` (${student.yearOfStudy})` : ''}`
+                                : '—'}
+                            </div>
+                            <div className="text-[10px] text-slate-400">{student.homeParish || '—'}</div>
+                          </td>
                         </tr>
                       ))}
                   </tbody>
@@ -1276,77 +1658,549 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
           )}
 
           {/* --------------------------------------------------------------- */}
-          {/* 4. CHALLENGE WEEK DATA VIEW                                     */}
+          {/* 4. CHALLENGE WEEK DATA, ANALYTICS, EXPORTS & PAYMENT APPROVALS  */}
           {/* --------------------------------------------------------------- */}
           {activeModule === 'challenge-week' && (
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4 animate-in fade-in duration-200">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="space-y-6 animate-in fade-in duration-200">
+
+              {/* Top Banner & Export Controls */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                    <Trophy className="w-4 h-4 text-amber-500" />
-                    <span>Challenge Week Teams & Leaderboard ({challengeTeams.length})</span>
+                  <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                    <Trophy className="w-5 h-5 text-amber-500" />
+                    <span>Challenge Week 2027 · Admin Overview</span>
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    Challenge week team registrations, delegate counts, M-Pesa receipts, and scores.
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Track total registered delegates, accepted/rejected counts, M-Pesa collections, deanery totals, and export full rosters.
                   </p>
                 </div>
 
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadChallengeExcelCsv(allChallengeMemberRows, challengeSummary);
+                      setSuccessToast(`Downloaded Excel roster (${allChallengeMemberRows.length} registered members).`);
+                      setTimeout(() => setSuccessToast(null), 3500);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-xs cursor-pointer transition-colors"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    <span>Download Excel (.csv)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadChallengePdfReport(allChallengeMemberRows, challengeSummary);
+                      setSuccessToast(`Downloaded PDF roster (${allChallengeMemberRows.length} registered members).`);
+                      setTimeout(() => setSuccessToast(null), 3500);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl shadow-xs cursor-pointer transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Download PDF (.pdf)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 5 Summary KPI Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
+                  <div className="flex items-center justify-between text-slate-500 text-xs font-medium">
+                    <span>Registered</span>
+                    <span className="p-1.5 bg-slate-100 text-slate-700 rounded-lg">
+                      <Users className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
+                  <div className="text-2xl font-black text-slate-900 mt-1 font-mono tabular-nums">
+                    {challengeSummary.totalRegistered.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    {challengeTeams.length} submission{challengeTeams.length !== 1 ? 's' : ''}
+                  </div>
+                </div>
+
+                <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-xs">
+                  <div className="flex items-center justify-between text-emerald-700 text-xs font-medium">
+                    <span>Accepted</span>
+                    <span className="p-1.5 bg-emerald-50 text-emerald-700 rounded-lg">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
+                  <div className="text-2xl font-black text-emerald-700 mt-1 font-mono tabular-nums">
+                    {challengeSummary.totalAccepted.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-emerald-600 mt-0.5 font-medium">
+                    Confirmed passes
+                  </div>
+                </div>
+
+                <div className="bg-white border border-red-200 rounded-xl p-4 shadow-xs">
+                  <div className="flex items-center justify-between text-red-700 text-xs font-medium">
+                    <span>Rejected</span>
+                    <span className="p-1.5 bg-red-50 text-red-600 rounded-lg">
+                      <XCircle className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
+                  <div className="text-2xl font-black text-red-700 mt-1 font-mono tabular-nums">
+                    {challengeSummary.totalRejected.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-red-600 mt-0.5 font-medium">
+                    {challengeSummary.totalPending} pending review
+                  </div>
+                </div>
+
+                <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-xs">
+                  <div className="flex items-center justify-between text-emerald-800 text-xs font-medium">
+                    <span>Amount Collected</span>
+                    <span className="p-1.5 bg-emerald-50 text-emerald-700 rounded-lg">
+                      <CreditCard className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
+                  <div className="text-xl font-black text-emerald-800 mt-1 font-mono tabular-nums">
+                    KSh {challengeSummary.amountCollected.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-emerald-600 mt-0.5 font-medium">
+                    Confirmed M-Pesa total
+                  </div>
+                </div>
+
+                <div className="bg-white border border-amber-200 rounded-xl p-4 shadow-xs col-span-2 sm:col-span-1">
+                  <div className="flex items-center justify-between text-amber-800 text-xs font-medium">
+                    <span>Total Amount</span>
+                    <span className="p-1.5 bg-amber-50 text-amber-700 rounded-lg">
+                      <Trophy className="w-3.5 h-3.5" />
+                    </span>
+                  </div>
+                  <div className="text-xl font-black text-slate-900 mt-1 font-mono tabular-nums">
+                    KSh {challengeSummary.totalExpectedAmount.toLocaleString()}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Based on {challengeSummary.totalRegistered} registered
+                  </div>
+                </div>
+              </div>
+
+              {/* Registered Per Deanery Breakdown */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Registered Per Deanery
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      Click any deanery card to filter registrations and members below.
+                    </p>
+                  </div>
+                  {challengeDeaneryFilter !== 'ALL' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChallengeDeaneryFilter('ALL');
+                        setChallengeMembersPage(1);
+                      }}
+                      className="text-xs font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1 rounded-lg cursor-pointer self-start sm:self-auto"
+                    >
+                      Clear Filter ({challengeDeaneryFilter})
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  {challengeDeaneryStats.map((d) => {
+                    const isSelected = challengeDeaneryFilter.toLowerCase() === d.deaneryName.toLowerCase();
+                    return (
+                      <button
+                        key={d.deaneryName}
+                        type="button"
+                        onClick={() => {
+                          setChallengeDeaneryFilter(isSelected ? 'ALL' : d.deaneryName);
+                          setChallengeMembersPage(1);
+                        }}
+                        className={`text-left p-3 rounded-xl border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
+                            : 'bg-slate-50/80 hover:bg-white border-slate-200 hover:border-slate-300 text-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span className={`text-xs font-bold truncate ${isSelected ? 'text-white' : 'text-slate-800'}`}>
+                            {d.deaneryName}
+                          </span>
+                          <span className={`text-sm font-black font-mono tabular-nums ${isSelected ? 'text-amber-300' : 'text-slate-900'}`}>
+                            {d.registered}
+                          </span>
+                        </div>
+                        <div className={`text-[10px] mt-1 flex items-center justify-between ${isSelected ? 'text-slate-300' : 'text-slate-500'}`}>
+                          <span>✓ {d.accepted} · ✗ {d.rejected}</span>
+                          <span className="font-mono">KSh {d.collectedAmount.toLocaleString()}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Filter Bar */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <select
+                    value={challengeDeaneryFilter}
+                    onChange={(e) => {
+                      setChallengeDeaneryFilter(e.target.value);
+                      setChallengeMembersPage(1);
+                    }}
+                    className="px-2.5 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-hidden cursor-pointer"
+                  >
+                    <option value="ALL">All Deaneries</option>
+                    {challengeDeaneryStats.map((d) => (
+                      <option key={d.deaneryName} value={d.deaneryName}>
+                        {d.deaneryName} ({d.registered})
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={challengeStatusFilter}
+                    onChange={(e) => {
+                      setChallengeStatusFilter(e.target.value as any);
+                      setChallengeMembersPage(1);
+                    }}
+                    className="px-2.5 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-hidden cursor-pointer"
+                  >
+                    <option value="ALL">All Statuses</option>
+                    <option value="Pending Verification">Pending Verification ({pendingChallengeTeams.length})</option>
+                    <option value="Confirmed">Confirmed</option>
+                    <option value="Rejected">Rejected</option>
+                  </select>
+                </div>
+
                 <div className="relative">
-                  <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={moduleSearchTerm}
-                    onChange={(e) => setModuleSearchTerm(e.target.value)}
-                    placeholder="Search team or leader..."
-                    className="pl-7 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-hidden"
+                    onChange={(e) => {
+                      setModuleSearchTerm(e.target.value);
+                      setChallengeMembersPage(1);
+                    }}
+                    placeholder="Search member, pass ID, team, parish, M-Pesa..."
+                    className="w-full sm:w-64 pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-hidden"
                   />
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px]">
-                      <th className="py-2.5 px-3">Pass ID</th>
-                      <th className="py-2.5 px-3">Team Name</th>
-                      <th className="py-2.5 px-3">Parish & Deanery</th>
-                      <th className="py-2.5 px-3">Team Leader</th>
-                      <th className="py-2.5 px-3 text-center">Delegates</th>
-                      <th className="py-2.5 px-3 text-right">Fee (KES)</th>
-                      <th className="py-2.5 px-3">M-Pesa Code</th>
-                      <th className="py-2.5 px-3 text-right">Points</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {challengeTeams
-                      .filter(t => !moduleSearchTerm || t.teamName.toLowerCase().includes(moduleSearchTerm.toLowerCase()) || t.teamLeaderName.toLowerCase().includes(moduleSearchTerm.toLowerCase()))
-                      .map((team) => (
-                        <tr key={team.id} className="hover:bg-slate-50">
-                          <td className="py-2.5 px-3 font-mono font-bold text-amber-900">{team.id}</td>
-                          <td className="py-2.5 px-3 font-bold text-slate-900">{team.teamName}</td>
-                          <td className="py-2.5 px-3 text-slate-600">
-                            <div>{team.parishName}</div>
-                            <div className="text-[10px] text-slate-400">{team.deaneryName}</div>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="font-semibold text-slate-800">{team.teamLeaderName}</div>
-                            <div className="text-[10px] font-mono text-slate-500">{team.teamLeaderPhone}</div>
-                          </td>
-                          <td className="py-2.5 px-3 text-center font-bold text-slate-900">{team.membersCount}</td>
-                          <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-800">
-                            KSh {team.totalFee.toLocaleString()}
-                          </td>
-                          <td className="py-2.5 px-3 font-mono text-[11px] font-bold text-emerald-800">
-                            {team.mpesaCode}
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-700">
-                            {team.sportsPoints + team.spiritualTasksCompleted * 10} pts
+              {/* Pending Banner + Payment Approvals Table */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Team & Individual Payment Approvals ({filteredChallengeTeams.length})
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      Confirm or reject M-Pesa payments. Accepting a group registration activates all member cards at once.
+                    </p>
+                  </div>
+                </div>
+
+                {pendingChallengeTeams.length > 0 && (
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-between gap-3 text-xs text-amber-950">
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>
+                        <strong>{pendingChallengeTeams.length}</strong> Challenge Week registration{pendingChallengeTeams.length !== 1 ? 's are' : ' is'} awaiting M-Pesa payment verification.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px]">
+                        <th className="py-2.5 px-3">Pass ID</th>
+                        <th className="py-2.5 px-3">Team / Delegate</th>
+                        <th className="py-2.5 px-3">Location</th>
+                        <th className="py-2.5 px-3">Leader & Phone</th>
+                        <th className="py-2.5 px-3 text-center">Members</th>
+                        <th className="py-2.5 px-3 text-right">Fee (KES)</th>
+                        <th className="py-2.5 px-3">M-Pesa</th>
+                        <th className="py-2.5 px-3">Status</th>
+                        <th className="py-2.5 px-3 text-right">Admin Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {filteredChallengeTeams.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="py-6 text-center text-slate-500">
+                            No registrations match the current filters.
                           </td>
                         </tr>
-                      ))}
-                  </tbody>
-                </table>
+                      ) : (
+                        filteredChallengeTeams.map((team) => {
+                          const isPending = team.paymentStatus === 'Pending Verification';
+                          const isConfirmed = team.paymentStatus === 'Confirmed';
+                          const isExpanded = expandedChallengeId === team.id;
+
+                          return (
+                            <React.Fragment key={team.id}>
+                              <tr className={`hover:bg-slate-50 ${isPending ? 'bg-amber-50/40' : ''}`}>
+                                <td className="py-2.5 px-3 font-mono font-bold text-amber-900 whitespace-nowrap">{team.id}</td>
+                                <td className="py-2.5 px-3">
+                                  <div className="font-bold text-slate-900">{team.teamName}</div>
+                                  <div className="text-[10px] text-slate-500">
+                                    {team.registrationType || 'Group'}
+                                    {team.photographyConsent ? ' · Consent ✓' : ''}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-600">
+                                  <div className="font-semibold text-slate-800">{team.parishName}</div>
+                                  <div className="text-[10px] text-slate-500">
+                                    {team.deaneryName}{team.localChurch ? ` · ${team.localChurch}` : ''}
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <div className="font-semibold text-slate-800">{team.teamLeaderName}</div>
+                                  <div className="text-[10px] font-mono text-slate-500">{team.teamLeaderPhone}</div>
+                                </td>
+                                <td className="py-2.5 px-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedChallengeId(isExpanded ? null : team.id)}
+                                    className="px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 font-bold text-slate-900 cursor-pointer"
+                                    title="Click to view member list"
+                                  >
+                                    {team.membersCount} {team.memberNames?.length ? (isExpanded ? '▲' : '▼') : ''}
+                                  </button>
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-800 whitespace-nowrap">
+                                  KSh {team.totalFee.toLocaleString()}
+                                </td>
+                                <td className="py-2.5 px-3 font-mono text-[11px] font-bold text-emerald-800 whitespace-nowrap">
+                                  {team.mpesaCode || 'CASH'}
+                                </td>
+                                <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[10px] font-bold inline-block ${
+                                      isConfirmed
+                                        ? 'bg-emerald-100 text-emerald-900'
+                                        : isPending
+                                          ? 'bg-amber-100 text-amber-900'
+                                          : 'bg-red-100 text-red-900'
+                                    }`}
+                                  >
+                                    {team.paymentStatus}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    {!isConfirmed && (
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          setActionError(null);
+                                          try {
+                                            await confirmChallengeTeam(team.id, 'Archdiocesan Youth Chaplaincy');
+                                            confetti({ particleCount: 60, spread: 55, origin: { y: 0.6 } });
+                                            setSuccessToast(
+                                              `Confirmed payment & activated ${team.membersCount} Challenge Week card${team.membersCount !== 1 ? 's' : ''} for ${team.teamName}!`
+                                            );
+                                            setTimeout(() => setSuccessToast(null), 4000);
+                                          } catch (err) {
+                                            setActionError(
+                                              err instanceof Error ? err.message : 'Failed to confirm Challenge Week payment.'
+                                            );
+                                          }
+                                        }}
+                                        className="px-2.5 py-1 text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer shadow-2xs"
+                                      >
+                                        Accept
+                                      </button>
+                                    )}
+                                    {team.paymentStatus !== 'Rejected' && (
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          setActionError(null);
+                                          try {
+                                            await rejectChallengeTeam(team.id);
+                                            setSuccessToast(`Marked ${team.teamName} as Rejected (payment not confirmed).`);
+                                            setTimeout(() => setSuccessToast(null), 4000);
+                                          } catch (err) {
+                                            setActionError(
+                                              err instanceof Error ? err.message : 'Failed to reject Challenge Week submission.'
+                                            );
+                                          }
+                                        }}
+                                        className="px-2.5 py-1 text-[11px] font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg cursor-pointer"
+                                      >
+                                        Reject
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                              {isExpanded && team.memberNames && team.memberNames.length > 0 && (
+                                <tr className="bg-slate-50/70">
+                                  <td colSpan={9} className="px-4 py-3">
+                                    <div className="text-[11px] font-bold text-slate-700 mb-1.5">
+                                      Registered Youths in this Submission ({team.memberNames.length}):
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {team.memberNames.map((mName, mIdx) => (
+                                        <span
+                                          key={mIdx}
+                                          className="px-2 py-0.5 bg-white border border-slate-200 rounded text-[11px] font-medium text-slate-800"
+                                        >
+                                          {mIdx + 1}. {mName}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
+
+              {/* Paginated Registered Members List (Up to 25 per page) */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Registered Challenge Week Members ({filteredChallengeMembers.length})
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      Showing up to 25 registered youths per page. Use Next Page / Prev to browse all delegates.
+                    </p>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg self-start sm:self-auto">
+                    Page {safeChallengePage} of {totalChallengePages}
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px]">
+                        <th className="py-2.5 px-3">#</th>
+                        <th className="py-2.5 px-3">Pass Code</th>
+                        <th className="py-2.5 px-3">Member Name</th>
+                        <th className="py-2.5 px-3">Deanery</th>
+                        <th className="py-2.5 px-3">Parish & Local Church</th>
+                        <th className="py-2.5 px-3">Phone</th>
+                        <th className="py-2.5 px-3">M-Pesa</th>
+                        <th className="py-2.5 px-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {paginatedChallengeMembers.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="py-8 text-center text-slate-500">
+                            No registered Challenge Week members match the selected filter.
+                          </td>
+                        </tr>
+                      ) : (
+                        paginatedChallengeMembers.map((member, idx) => {
+                          const globalIdx = (safeChallengePage - 1) * MEMBERS_PER_PAGE + idx + 1;
+                          return (
+                            <tr key={`${member.code}-${globalIdx}`} className="hover:bg-slate-50">
+                              <td className="py-2.5 px-3 font-mono text-slate-400">{globalIdx}</td>
+                              <td className="py-2.5 px-3 font-mono font-bold text-amber-900 whitespace-nowrap">{member.code}</td>
+                              <td className="py-2.5 px-3 font-bold text-slate-900">
+                                <div>{member.fullName}</div>
+                                <div className="text-[10px] font-normal text-slate-500">{member.teamName}</div>
+                              </td>
+                              <td className="py-2.5 px-3 text-slate-700 whitespace-nowrap">{member.deaneryName}</td>
+                              <td className="py-2.5 px-3 text-slate-700">
+                                <div className="font-semibold text-slate-800">{member.parishName}</div>
+                                <div className="text-[10px] text-emerald-700">{member.localChurch}</div>
+                              </td>
+                              <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700 whitespace-nowrap">{member.phone}</td>
+                              <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700 whitespace-nowrap">{member.mpesaCode}</td>
+                              <td className="py-2.5 px-3 whitespace-nowrap">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    member.status === 'Confirmed'
+                                      ? 'bg-emerald-100 text-emerald-900'
+                                      : member.status === 'Rejected'
+                                        ? 'bg-red-100 text-red-900'
+                                        : 'bg-amber-100 text-amber-900'
+                                  }`}
+                                >
+                                  {member.status}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Controls (25 per page) */}
+                {filteredChallengeMembers.length > 0 && (
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 text-xs text-slate-600">
+                    <div>
+                      Showing{' '}
+                      <strong>{(safeChallengePage - 1) * MEMBERS_PER_PAGE + 1}</strong>–
+                      <strong>{Math.min(safeChallengePage * MEMBERS_PER_PAGE, filteredChallengeMembers.length)}</strong> of{' '}
+                      <strong>{filteredChallengeMembers.length}</strong> registered members
+                    </div>
+
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        disabled={safeChallengePage <= 1}
+                        onClick={() => setChallengeMembersPage((p) => Math.max(1, p - 1))}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 font-semibold cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>Previous</span>
+                      </button>
+
+                      {Array.from({ length: totalChallengePages }, (_, i) => i + 1)
+                        .filter((p) => p === 1 || p === totalChallengePages || Math.abs(p - safeChallengePage) <= 1)
+                        .map((p, i, arr) => (
+                          <React.Fragment key={p}>
+                            {i > 0 && p - arr[i - 1] > 1 && (
+                              <span className="px-1 text-slate-400">…</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setChallengeMembersPage(p)}
+                              className={`px-2.5 py-1.5 rounded-lg border text-xs font-bold cursor-pointer ${
+                                p === safeChallengePage
+                                  ? 'bg-slate-900 text-white border-slate-900'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                              }`}
+                            >
+                              {p}
+                            </button>
+                          </React.Fragment>
+                        ))}
+
+                      <button
+                        type="button"
+                        disabled={safeChallengePage >= totalChallengePages}
+                        onClick={() => setChallengeMembersPage((p) => Math.min(totalChallengePages, p + 1))}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 font-semibold cursor-pointer disabled:cursor-not-allowed"
+                      >
+                        <span>Next Page</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
 
@@ -1382,27 +2236,42 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px]">
-                      <th className="py-2.5 px-3">Name</th>
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3">Career Field</th>
-                      <th className="py-2.5 px-3">Current Organization</th>
-                      <th className="py-2.5 px-3">Contact</th>
+                      <th className="py-2.5 px-3">Name &amp; Username</th>
+                      <th className="py-2.5 px-3">Phone</th>
+                      <th className="py-2.5 px-3">School</th>
+                      <th className="py-2.5 px-3">Grade Attained</th>
+                      <th className="py-2.5 px-3">Desired Course</th>
+                      <th className="py-2.5 px-3">Home Area / Parish</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {careerRegistrations
-                      .filter(c => !moduleSearchTerm || c.fullName.toLowerCase().includes(moduleSearchTerm.toLowerCase()) || c.careerField.toLowerCase().includes(moduleSearchTerm.toLowerCase()))
+                      .filter(c => {
+                        if (!moduleSearchTerm) return true;
+                        const q = moduleSearchTerm.toLowerCase();
+                        return (
+                          (c.fullName || '').toLowerCase().includes(q) ||
+                          (c.username || '').toLowerCase().includes(q) ||
+                          (c.phone || '').toLowerCase().includes(q) ||
+                          (c.school || '').toLowerCase().includes(q) ||
+                          (c.desiredCourse || '').toLowerCase().includes(q) ||
+                          (c.homeAreaParish || '').toLowerCase().includes(q) ||
+                          (c.careerField || '').toLowerCase().includes(q)
+                        );
+                      })
                       .map((c) => (
                         <tr key={c.id} className="hover:bg-slate-50">
-                          <td className="py-2.5 px-3 font-bold text-slate-900">{c.fullName}</td>
                           <td className="py-2.5 px-3">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-50 text-blue-800">
-                              {c.type}
-                            </span>
+                            <div className="font-bold text-slate-900">{c.fullName}</div>
+                            <div className="text-[10px] text-blue-700 font-mono">
+                              {c.username ? `@${c.username}` : c.type || c.id}
+                            </div>
                           </td>
-                          <td className="py-2.5 px-3 font-semibold text-slate-800">{c.careerField}</td>
-                          <td className="py-2.5 px-3 text-slate-600">{c.currentOrganization}</td>
                           <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700">{c.phone}</td>
+                          <td className="py-2.5 px-3 text-slate-700">{c.school || c.currentOrganization || '—'}</td>
+                          <td className="py-2.5 px-3 font-semibold text-slate-800">{c.gradeAttained || '—'}</td>
+                          <td className="py-2.5 px-3 font-semibold text-blue-800">{c.desiredCourse || c.careerField || '—'}</td>
+                          <td className="py-2.5 px-3 text-slate-600">{c.homeAreaParish || c.parishId || '—'}</td>
                         </tr>
                       ))}
                   </tbody>
@@ -1445,15 +2314,27 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase text-[10px]">
                       <th className="py-2.5 px-3">Name</th>
                       <th className="py-2.5 px-3">Role</th>
-                      <th className="py-2.5 px-3">Profession</th>
-                      <th className="py-2.5 px-3 text-center">Service (Yrs)</th>
-                      <th className="py-2.5 px-3 text-center">Safeguarding</th>
+                      <th className="py-2.5 px-3">Deanery &amp; Parish</th>
+                      <th className="py-2.5 px-3">Local Church</th>
+                      <th className="py-2.5 px-3">Amount &amp; M-Pesa</th>
                       <th className="py-2.5 px-3">Contact</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {matronsPatrons
-                      .filter(m => !moduleSearchTerm || m.fullName.toLowerCase().includes(moduleSearchTerm.toLowerCase()) || m.profession.toLowerCase().includes(moduleSearchTerm.toLowerCase()))
+                      .filter(m => {
+                        if (!moduleSearchTerm) return true;
+                        const q = moduleSearchTerm.toLowerCase();
+                        return (
+                          (m.fullName || '').toLowerCase().includes(q) ||
+                          (m.deaneryName || '').toLowerCase().includes(q) ||
+                          (m.parishName || '').toLowerCase().includes(q) ||
+                          (m.localChurch || '').toLowerCase().includes(q) ||
+                          (m.profession || '').toLowerCase().includes(q) ||
+                          (m.phone || '').toLowerCase().includes(q) ||
+                          (m.mpesaCode || '').toLowerCase().includes(q)
+                        );
+                      })
                       .map((patron) => (
                         <tr key={patron.id} className="hover:bg-slate-50">
                           <td className="py-2.5 px-3 font-bold text-slate-900">{patron.fullName}</td>
@@ -1462,14 +2343,14 @@ export const ParishAdminDashboard: React.FC<ParishAdminDashboardProps> = ({
                               {patron.role}
                             </span>
                           </td>
-                          <td className="py-2.5 px-3 text-slate-700">{patron.profession}</td>
-                          <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-800">
-                            {patron.yearsOfService} yrs
+                          <td className="py-2.5 px-3 text-slate-700">
+                            <div className="font-semibold text-slate-800">{patron.parishName || patron.parishId || '—'}</div>
+                            <div className="text-[10px] text-slate-400">{patron.deaneryName || patron.deaneryId || '—'}</div>
                           </td>
-                          <td className="py-2.5 px-3 text-center">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800">
-                              Certified
-                            </span>
+                          <td className="py-2.5 px-3 text-slate-700">{patron.localChurch || patron.profession || 'Parish Center'}</td>
+                          <td className="py-2.5 px-3">
+                            <div className="font-bold text-emerald-700">KSh {patron.amountPaid ?? 100}</div>
+                            <div className="text-[10px] font-mono text-slate-500">{patron.mpesaCode || 'Verified'}</div>
                           </td>
                           <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700">{patron.phone}</td>
                         </tr>

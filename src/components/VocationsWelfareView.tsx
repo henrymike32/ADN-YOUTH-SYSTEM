@@ -49,52 +49,68 @@ export const VocationsWelfareView: React.FC = () => {
 
   // Talent filter
   const [selectedSkillFilter, setSelectedSkillFilter] = useState('ALL');
+  const [deskError, setDeskError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Compute all unique skills across all enrolled members
   const allSkills = Array.from(
     new Set(members.flatMap((m) => m.skills.map((s) => s.trim())))
   ).filter(Boolean);
 
-  const handleCreateVocation = (e: React.FormEvent) => {
+  const handleCreateVocation = async (e: React.FormEvent) => {
     e.preventDefault();
     const mem = members.find((m) => m.id === aspirantMemberId);
     if (!mem) return;
 
-    addVocation({
-      memberId: mem.id,
-      aspirantName: mem.fullName,
-      gender: mem.gender,
-      parishId: mem.parishId,
-      deaneryId: mem.deaneryId,
-      vocationType,
-      targetOrder,
-      stage,
-      spiritualDirector: spiritualDirector.trim() || 'Parish Youth Chaplain',
-      contactPhone: mem.phone,
-      notes: vocationNotes.trim() || 'Aspirant seeking vocational discernment in Nyeri Archdiocese.',
-    });
-
-    setShowVocationModal(false);
+    setDeskError(null);
+    setIsSubmitting(true);
+    try {
+      await addVocation({
+        memberId: mem.id,
+        aspirantName: mem.fullName,
+        gender: mem.gender,
+        parishId: mem.parishId,
+        deaneryId: mem.deaneryId,
+        vocationType,
+        targetOrder,
+        stage,
+        spiritualDirector: spiritualDirector.trim() || 'Parish Youth Chaplain',
+        contactPhone: mem.phone,
+        notes: vocationNotes.trim() || 'Aspirant seeking vocational discernment in Nyeri Archdiocese.',
+      });
+      setShowVocationModal(false);
+    } catch (err) {
+      setDeskError(err instanceof Error ? err.message : 'Unable to save vocation record.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleCreateWelfare = (e: React.FormEvent) => {
+  const handleCreateWelfare = async (e: React.FormEvent) => {
     e.preventDefault();
     const mem = members.find((m) => m.id === welfareMemberId);
     if (!mem) return;
 
-    addWelfareCase({
-      memberId: mem.id,
-      memberName: mem.fullName,
-      parishId: mem.parishId,
-      category: welfareCategory,
-      description: welfareDescription.trim(),
-      urgency: welfareUrgency,
-      status: 'Open',
-      amountRequired: Number(welfareAmount) || 0,
-      amountDisbursed: 0,
-    });
-
-    setShowWelfareModal(false);
+    setDeskError(null);
+    setIsSubmitting(true);
+    try {
+      await addWelfareCase({
+        memberId: mem.id,
+        memberName: mem.fullName,
+        parishId: mem.parishId,
+        category: welfareCategory,
+        description: welfareDescription.trim(),
+        urgency: welfareUrgency,
+        status: 'Open',
+        amountRequired: Number(welfareAmount) || 0,
+        amountDisbursed: 0,
+      });
+      setShowWelfareModal(false);
+    } catch (err) {
+      setDeskError(err instanceof Error ? err.message : 'Unable to save welfare case.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -144,6 +160,15 @@ export const VocationsWelfareView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {deskError && (
+        <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800 flex items-center justify-between">
+          <span>{deskError}</span>
+          <button onClick={() => setDeskError(null)} className="font-bold text-red-700">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* 1. VOCATIONS DESK */}
       {activeSubTab === 'vocations' && (
@@ -208,9 +233,14 @@ export const VocationsWelfareView: React.FC = () => {
                       </span>
                       <select
                         value={v.stage}
-                        onChange={(e) =>
-                          updateVocationStage(v.id, e.target.value as VocationAspirant['stage'])
-                        }
+                        onChange={async (e) => {
+                          setDeskError(null);
+                          try {
+                            await updateVocationStage(v.id, e.target.value as VocationAspirant['stage']);
+                          } catch (err) {
+                            setDeskError(err instanceof Error ? err.message : 'Unable to update vocation stage.');
+                          }
+                        }}
                         className="text-xs font-semibold text-slate-800 bg-transparent border-b border-slate-300 focus:outline-hidden py-0.5"
                       >
                         <option value="Initial Inquiry">Initial Inquiry</option>
@@ -316,13 +346,20 @@ export const VocationsWelfareView: React.FC = () => {
                         <td className="py-3 px-4 text-right">
                           {caseItem.status === 'Open' ? (
                             <button
-                              onClick={() =>
-                                updateWelfareStatus(
-                                  caseItem.id,
-                                  'Disbursed',
-                                  caseItem.amountRequired
-                                )
-                              }
+                              onClick={async () => {
+                                setDeskError(null);
+                                try {
+                                  await updateWelfareStatus(
+                                    caseItem.id,
+                                    'Disbursed',
+                                    caseItem.amountRequired
+                                  );
+                                } catch (err) {
+                                  setDeskError(
+                                    err instanceof Error ? err.message : 'Admin login required to disburse aid.'
+                                  );
+                                }
+                              }}
                               className="px-2.5 py-1 text-[11px] font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded transition-colors"
                             >
                               Disburse Aid
@@ -542,9 +579,10 @@ export const VocationsWelfareView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 rounded-lg transition-colors"
                 >
-                  Enroll Aspirant
+                  {isSubmitting ? 'Saving...' : 'Enroll Aspirant'}
                 </button>
               </div>
             </form>
@@ -657,9 +695,10 @@ export const VocationsWelfareView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-60 rounded-lg transition-colors"
                 >
-                  Submit Request
+                  {isSubmitting ? 'Submitting...' : 'Submit Request'}
                 </button>
               </div>
             </form>

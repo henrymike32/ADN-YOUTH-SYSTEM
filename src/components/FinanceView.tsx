@@ -22,6 +22,7 @@ export const FinanceView: React.FC<FinanceViewProps> = ({ onOpenRemittanceModal 
 
   const [filterDeanery, setFilterDeanery] = useState('ALL');
   const [filterStatus, setFilterStatus] = useState('ALL');
+  const [financeError, setFinanceError] = useState<string | null>(null);
 
   const filteredRemittances = remittances.filter((rem) => {
     const matchesDeanery = filterDeanery === 'ALL' || rem.deaneryId === filterDeanery;
@@ -109,6 +110,16 @@ export const FinanceView: React.FC<FinanceViewProps> = ({ onOpenRemittanceModal 
           </button>
         </div>
       </div>
+
+      {/* Error Notice */}
+      {financeError && (
+        <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-800 flex items-center justify-between">
+          <span>{financeError}</span>
+          <button onClick={() => setFinanceError(null)} className="text-red-700 font-bold">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Financial KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -256,12 +267,19 @@ export const FinanceView: React.FC<FinanceViewProps> = ({ onOpenRemittanceModal 
                       <td className="py-3 px-4 text-right">
                         {rem.status === 'Pending Verification' ? (
                           <button
-                            onClick={() =>
-                              verifyRemittance(
-                                rem.id,
-                                'Archdiocesan Youth Chaplaincy (Fr. Anthony Mwangi)'
-                              )
-                            }
+                            onClick={async () => {
+                              setFinanceError(null);
+                              try {
+                                await verifyRemittance(
+                                  rem.id,
+                                  'Archdiocesan Youth Chaplaincy (Fr. Anthony Mwangi)'
+                                );
+                              } catch (err) {
+                                setFinanceError(
+                                  err instanceof Error ? err.message : 'Admin login required to verify remittances.'
+                                );
+                              }
+                            }}
                             className="px-2.5 py-1 text-[11px] font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded transition-colors shadow-xs"
                           >
                             Verify M-Pesa

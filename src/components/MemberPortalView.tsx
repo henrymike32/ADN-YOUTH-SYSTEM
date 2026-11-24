@@ -30,6 +30,7 @@ export const MemberPortalView: React.FC<MemberPortalViewProps> = ({ onOpenCardMo
   } = useYouth();
 
   const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
+  const [eventActionError, setEventActionError] = useState<string | null>(null);
 
   const activeMember = members.find((m) => m.id === currentMemberId) || members[0];
   const memberParish = parishes.find((p) => p.id === activeMember?.parishId);
@@ -60,7 +61,17 @@ export const MemberPortalView: React.FC<MemberPortalViewProps> = ({ onOpenCardMo
       .catch((err) => console.error(err));
   }, [activeMember, memberParish, memberDeanery]);
 
-  if (!activeMember) return null;
+  if (!activeMember) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2 shadow-xs">
+        <UserCheck className="w-8 h-8 text-slate-400 mx-auto" />
+        <h2 className="text-base font-bold text-slate-900">No Registered Youth Members Yet</h2>
+        <p className="text-xs text-slate-500">
+          Register a youth member first to preview digital passes and portal details.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -269,6 +280,11 @@ export const MemberPortalView: React.FC<MemberPortalViewProps> = ({ onOpenCardMo
             <p className="text-xs text-slate-500">
               One-click registration for upcoming Archdiocesan and Deanery gatherings
             </p>
+            {eventActionError && (
+              <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800">
+                {eventActionError}
+              </div>
+            )}
 
             <div className="space-y-2.5">
               {events.map((event) => {
@@ -304,7 +320,16 @@ export const MemberPortalView: React.FC<MemberPortalViewProps> = ({ onOpenCardMo
                         </span>
                       )}
                       <button
-                        onClick={() => toggleEventRegistration(event.id, activeMember.id)}
+                        onClick={async () => {
+                          setEventActionError(null);
+                          try {
+                            await toggleEventRegistration(event.id, activeMember.id);
+                          } catch (err) {
+                            setEventActionError(
+                              err instanceof Error ? err.message : 'Unable to update event registration.'
+                            );
+                          }
+                        }}
                         className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                           isRegistered
                             ? 'text-slate-700 bg-white border border-slate-300 hover:bg-slate-100'

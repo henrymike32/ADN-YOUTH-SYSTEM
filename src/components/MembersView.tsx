@@ -34,7 +34,12 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
     parishes, 
     deaneries, 
     parishBatches, 
-    parishLeaders, 
+    dbStatus,
+    adminToken,
+    setupAdminPassword,
+    loginAdmin,
+    logoutAdmin,
+    loginModuleAccount,
     addParishRegistrationBatch, 
     addMemberToBatch,
     updateMember,
@@ -78,10 +83,14 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
   const [regError, setRegError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Admin login states: username 'admin' and password 'ADN@2027' (hidden)
-  const [adminUser, setAdminUser] = useState('');
+  // Admin login / first-run setup states
+  const [adminUser, setAdminUser] = useState('admin');
   const [adminPassword, setAdminPassword] = useState('');
+  const [adminConfirmPassword, setAdminConfirmPassword] = useState('');
   const [adminLoginError, setAdminLoginError] = useState<string | null>(null);
+  const [isAdminSubmitting, setIsAdminSubmitting] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [leaderActionError, setLeaderActionError] = useState<string | null>(null);
 
   // Sync parish list with selected deanery
   const currentDeaneryObj = useMemo(() => {
@@ -134,7 +143,7 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
   }, [activeLeaderBatch, leaderMembers]);
 
   // Handle Registration Submit
-  const handleRegisterSubmit = (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegError(null);
 
@@ -145,6 +154,11 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
 
     if (memberCount > 200) {
       setRegError('A leader can register up to a maximum of 200 members.');
+      return;
+    }
+
+    if (!password.trim() || password.trim().length < 4) {
+      setRegError('Please create a password of at least 4 characters.');
       return;
     }
 
@@ -161,17 +175,23 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
     setIsSubmitting(true);
 
     try {
-      const dObj = deaneries.find((d) => d.name.toLowerCase().includes(selectedDeanery.toLowerCase())) || deaneries[0];
-      const pObj = parishes.find((p) => p.name.toLowerCase().includes(selectedParish.toLowerCase())) || parishes[0];
+      const dObj = deaneries.find((d) => d.name.toLowerCase().includes(selectedDeanery.toLowerCase()));
+      const pObj = parishes.find(
+        (p) =>
+          p.name.toLowerCase() === selectedParish.toLowerCase() ||
+          p.name.toLowerCase().includes(selectedParish.toLowerCase())
+      );
+      const deanerySlug = `deanery-${selectedDeanery.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+      const parishSlug = `parish-${selectedParish.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
-      const { batch } = addParishRegistrationBatch(
+      const { batch } = await addParishRegistrationBatch(
         {
           leaderPhone: leaderPhone.trim(),
           leaderName: leaderName.trim(),
-          password: password.trim() || 'password123',
-          deaneryId: dObj?.id || 'deanery-tetu',
+          password: password.trim(),
+          deaneryId: dObj?.id || deanerySlug,
           deaneryName: selectedDeanery,
-          parishId: pObj?.id || 'parish-tetu',
+          parishId: pObj?.id || parishSlug,
           parishName: selectedParish,
           localChurch: localChurchName.trim(),
           memberCount,
@@ -185,18 +205,19 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
       );
 
       const leaderAccount: ParishLeaderAccount = {
-        leaderPhone: leaderPhone.trim(),
-        leaderName: leaderName.trim(),
-        password: password.trim() || 'password123',
-        deaneryName: selectedDeanery,
-        parishName: selectedParish,
-        localChurch: localChurchName.trim(),
+        leaderPhone: batch.leaderPhone,
+        leaderName: batch.leaderName,
+        password: '',
+        deaneryName: batch.deaneryName,
+        parishName: batch.parishName,
+        localChurch: batch.localChurch,
         batchId: batch.id,
       };
 
       setCurrentLeader(leaderAccount);
       setActiveLeaderBatch(batch);
       setActiveTab('leader-dashboard');
+      setPassword('');
 
       confetti({
         particleCount: 80,
@@ -210,80 +231,97 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
     }
   };
 
-  // Handle Login Submit
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  // Handle Login Submit (verified on server)
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
 
     const cleanPhone = loginPhone.trim();
     const cleanPass = loginPassword.trim();
 
-    // Check leader accounts
-    const foundLeader = parishLeaders.find(
-      (l) => l.leaderPhone === cleanPhone && (l.password === cleanPass || !l.password)
-    );
-
-    if (foundLeader) {
-      setCurrentLeader(foundLeader);
-      const batch = parishBatches.find((b) => b.id === foundLeader.batchId || b.leaderPhone === foundLeader.leaderPhone);
-      setActiveLeaderBatch(batch || null);
-      setActiveTab('leader-dashboard');
+    if (!cleanPhone || !cleanPass) {
+      setLoginError('Please enter both phone number and password.');
       return;
     }
 
-    const foundBatch = parishBatches.find(
-      (b) => b.leaderPhone === cleanPhone && (b.password === cleanPass || !b.password)
-    );
-
-    if (foundBatch) {
-      const leaderAccount: ParishLeaderAccount = {
-        leaderPhone: foundBatch.leaderPhone,
-        leaderName: foundBatch.leaderName,
-        password: foundBatch.password || cleanPass,
-        deaneryName: foundBatch.deaneryName,
-        parishName: foundBatch.parishName,
-        localChurch: foundBatch.localChurch,
-        batchId: foundBatch.id,
+    setIsLoggingIn(true);
+    try {
+      const res = await loginModuleAccount('parish-leader', cleanPhone, cleanPass);
+      const leaderAccount: ParishLeaderAccount = res.leader || {
+        leaderPhone: cleanPhone,
+        leaderName: res.batch?.leaderName || 'Youth Leader',
+        password: '',
+        deaneryName: res.batch?.deaneryName || '',
+        parishName: res.batch?.parishName || '',
+        localChurch: res.batch?.localChurch || '',
+        batchId: res.batch?.id || '',
       };
       setCurrentLeader(leaderAccount);
-      setActiveLeaderBatch(foundBatch);
+      const batch =
+        res.batch ||
+        parishBatches.find((b) => b.id === leaderAccount.batchId || b.leaderPhone === leaderAccount.leaderPhone) ||
+        null;
+      setActiveLeaderBatch(batch);
+      setLoginPassword('');
       setActiveTab('leader-dashboard');
-      return;
+    } catch (err: any) {
+      setLoginError(err?.message || 'Incorrect phone number or password. Please verify and try again.');
+    } finally {
+      setIsLoggingIn(false);
     }
-
-    // Individual member pass lookup
-    const foundMember = members.find(
-      (m) => m.phone.includes(cleanPhone) || m.id.toLowerCase() === cleanPhone.toLowerCase()
-    );
-
-    if (foundMember) {
-      setSelectedCardMember(foundMember);
-      return;
-    }
-
-    setLoginError('Incorrect phone number or password. Please verify and try again.');
   };
 
-  // Handle Admin Login Submit: user 'admin' and password 'ADN@2027'
-  const handleAdminLoginSubmit = (e: React.FormEvent) => {
+  // Handle Admin Setup (first run) or Admin Login (server-verified)
+  const handleAdminLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAdminLoginError(null);
 
-    const cleanUser = adminUser.trim();
+    const cleanUser = adminUser.trim() || 'admin';
     const cleanPass = adminPassword.trim();
 
-    if (cleanUser.toLowerCase() === 'admin' && cleanPass === 'ADN@2027') {
-      setAdminUser('');
+    if (!dbStatus.adminConfigured) {
+      if (cleanPass.length < 6) {
+        setAdminLoginError('Please choose an admin password of at least 6 characters.');
+        return;
+      }
+      if (cleanPass !== adminConfirmPassword.trim()) {
+        setAdminLoginError('Passwords do not match.');
+        return;
+      }
+      setIsAdminSubmitting(true);
+      try {
+        await setupAdminPassword(cleanPass, cleanUser);
+        setAdminPassword('');
+        setAdminConfirmPassword('');
+        setActiveTab('admin-dashboard');
+      } catch (err: any) {
+        setAdminLoginError(err?.message || 'Unable to save admin password.');
+      } finally {
+        setIsAdminSubmitting(false);
+      }
+      return;
+    }
+
+    if (!cleanPass) {
+      setAdminLoginError('Please enter your admin password.');
+      return;
+    }
+
+    setIsAdminSubmitting(true);
+    try {
+      await loginAdmin(cleanUser, cleanPass);
       setAdminPassword('');
       setAdminLoginError(null);
       setActiveTab('admin-dashboard');
-    } else {
-      setAdminLoginError('Invalid username or password. Access denied.');
+    } catch (err: any) {
+      setAdminLoginError(err?.message || 'Invalid username or password. Access denied.');
+    } finally {
+      setIsAdminSubmitting(false);
     }
   };
 
   // Add more members to existing batch in leader dashboard
-  const handleAddMoreSubmit = (e: React.FormEvent) => {
+  const handleAddMoreSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!addMoreNamesInput.trim() || !activeLeaderBatch) return;
 
@@ -292,16 +330,20 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
       .map((n) => n.trim())
       .filter((n) => n.length > 1);
 
-    names.forEach((name) => {
-      addMemberToBatch(activeLeaderBatch.id, {
-        fullName: name,
-        gender: 'Male',
-        age: 20,
-      });
-    });
-
-    setAddMoreNamesInput('');
-    setIsAddMoreModalOpen(false);
+    setLeaderActionError(null);
+    try {
+      for (const name of names) {
+        await addMemberToBatch(activeLeaderBatch.id, {
+          fullName: name,
+          gender: 'Male',
+          age: 20,
+        });
+      }
+      setAddMoreNamesInput('');
+      setIsAddMoreModalOpen(false);
+    } catch (err: any) {
+      setLeaderActionError(err?.message || 'Could not add members. Please try again.');
+    }
   };
 
   return (
@@ -632,9 +674,10 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
                 {/* Submit button */}
                 <button
                   type="submit"
-                  className="w-full py-2.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-all shadow-sm cursor-pointer"
+                  disabled={isLoggingIn}
+                  className="w-full py-2.5 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition-all shadow-sm cursor-pointer disabled:opacity-50"
                 >
-                  Login
+                  {isLoggingIn ? 'Signing in...' : 'Login'}
                 </button>
 
               </form>
@@ -645,14 +688,15 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
                   type="button"
                   onClick={() => {
                     setAdminLoginError(null);
-                    setAdminUser('');
+                    setAdminUser('admin');
                     setAdminPassword('');
+                    setAdminConfirmPassword('');
                     setActiveTab('admin-login');
                   }}
                   className="text-xs text-slate-500 hover:text-red-700 flex items-center justify-center gap-1 mx-auto font-medium cursor-pointer transition-colors"
                 >
                   <ShieldCheck className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Admin Login</span>
+                  <span>{dbStatus.adminConfigured ? 'Admin Login' : 'Set Up Admin Access'}</span>
                 </button>
               </div>
 
@@ -663,11 +707,7 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
       )}
 
       {/* ------------------------------------------------------------------- */}
-      {/* DEDICATED ADMIN LOGIN PAGE                                          */}
-      {/* User prompt: "for the admin login create a user admin password      */}
-      {/* ADN@2027 and should not be visible, once you click on admin login   */}
-      {/* it should take you to next page that ask you to input user and      */}
-      {/* password. if one keys wrong it should not proceed"                  */}
+      {/* DEDICATED ADMIN LOGIN / FIRST-RUN SETUP PAGE                        */}
       {/* ------------------------------------------------------------------- */}
       {activeTab === 'admin-login' && (
         <div className="max-w-md mx-auto space-y-4 animate-in fade-in duration-200">
@@ -690,12 +730,27 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
                 <ShieldCheck className="w-6 h-6" />
               </span>
               <h2 className="text-lg font-black text-slate-900 tracking-tight">
-                Archdiocesan Admin Login
+                {dbStatus.adminConfigured ? 'Archdiocesan Admin Login' : 'First-Time Admin Setup'}
               </h2>
               <p className="text-xs text-slate-500">
                 Catholic Archdiocese of Nyeri · Youth Directorate
               </p>
             </div>
+
+            {!dbStatus.loading && !dbStatus.dbConfigured && (
+              <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs space-y-1">
+                <div className="font-bold">Database connection required</div>
+                <p>
+                  Configure your MySQL database credentials in <code className="font-mono font-bold">api/config.php</code> and import <code className="font-mono font-bold">api/schema.sql</code> to enable cross-device Admin login.
+                </p>
+              </div>
+            )}
+
+            {!dbStatus.adminConfigured && dbStatus.dbConfigured && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs">
+                No admin password has been set on the database yet. Create your Admin password below to claim and lock Admin access.
+              </div>
+            )}
 
             {adminLoginError && (
               <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2 font-medium">
@@ -714,14 +769,14 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
                   required
                   value={adminUser}
                   onChange={(e) => setAdminUser(e.target.value)}
-                  placeholder="Enter admin username"
+                  placeholder="admin"
                   className="w-full px-3.5 py-2 text-xs font-mono bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Password *
+                  {dbStatus.adminConfigured ? 'Password *' : 'Create Admin Password (min 6 chars) *'}
                 </label>
                 <input
                   type="password"
@@ -733,11 +788,32 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
                 />
               </div>
 
+              {!dbStatus.adminConfigured && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Confirm Admin Password *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={adminConfirmPassword}
+                    onChange={(e) => setAdminConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-hidden"
+                  />
+                </div>
+              )}
+
               <button
                 type="submit"
-                className="w-full py-2.5 text-xs font-bold text-white bg-slate-900 hover:bg-black rounded-xl transition-all shadow-sm cursor-pointer"
+                disabled={isAdminSubmitting}
+                className="w-full py-2.5 text-xs font-bold text-white bg-slate-900 hover:bg-black rounded-xl transition-all shadow-sm cursor-pointer disabled:opacity-50"
               >
-                Login to Admin Dashboard
+                {isAdminSubmitting
+                  ? 'Verifying...'
+                  : dbStatus.adminConfigured
+                    ? 'Login to Admin Dashboard'
+                    : 'Save Admin Password & Open Dashboard'}
               </button>
             </form>
           </div>
@@ -782,13 +858,20 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
 
             {isLeaderBatchPending && (
               <button
-                onClick={() => setActiveTab('admin-dashboard')}
+                onClick={() => setActiveTab(adminToken ? 'admin-dashboard' : 'admin-login')}
                 className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer self-start sm:self-auto shrink-0"
               >
-                Go to Admin Dashboard to Accept →
+                {adminToken ? 'Go to Admin Dashboard →' : 'Admin Login to Accept →'}
               </button>
             )}
           </div>
+
+          {leaderActionError && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2 font-medium">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+              <span>{leaderActionError}</span>
+            </div>
+          )}
 
           {/* PARISH DETAILS */}
           <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -901,9 +984,13 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
 
                             {/* Delete */}
                             <button
-                              onClick={() => {
+                              onClick={async () => {
                                 if (confirm(`Delete ${member.fullName}?`)) {
-                                  deleteMember(member.id);
+                                  try {
+                                    await deleteMember(member.id);
+                                  } catch (err: any) {
+                                    setLeaderActionError(err?.message || 'Unable to delete member.');
+                                  }
                                 }
                               }}
                               title="Delete Member"
@@ -931,7 +1018,10 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
       {/* ------------------------------------------------------------------- */}
       {activeTab === 'admin-dashboard' && (
         <ParishAdminDashboard
-          onBackToPortal={() => setActiveTab('login')}
+          onBackToPortal={() => {
+            logoutAdmin();
+            setActiveTab('login');
+          }}
           onViewMemberCard={(m) => setSelectedCardMember(m)}
         />
       )}
@@ -1014,11 +1104,15 @@ export const MembersView: React.FC<MembersViewProps> = ({ onBackToHome }) => {
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
                 if (editingYouthMember) {
-                  updateMember(editingYouthMember.id, editingYouthMember);
-                  setEditingYouthMember(null);
+                  try {
+                    await updateMember(editingYouthMember.id, editingYouthMember);
+                    setEditingYouthMember(null);
+                  } catch (err: any) {
+                    setLeaderActionError(err?.message || 'Unable to update member details.');
+                  }
                 }
               }}
               className="space-y-3"
