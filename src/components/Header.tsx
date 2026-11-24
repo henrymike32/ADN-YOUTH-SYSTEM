@@ -1,18 +1,16 @@
 import React from 'react';
 import { OfficialLogo } from './OfficialLogo';
-import { Home, Database } from 'lucide-react';
+import { Home } from 'lucide-react';
 
 interface HeaderProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
   onOpenNewMemberModal?: () => void;
-  onOpenBackupModal: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   currentTab,
   setCurrentTab,
-  onOpenBackupModal,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-gradient-to-r from-red-600 via-rose-600 to-emerald-600 text-white shadow-md border-b border-black/10">
@@ -48,16 +46,6 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Main Dashboard</span>
             </button>
           )}
-
-          {/* Database Backup & Restore */}
-          <button
-            onClick={onOpenBackupModal}
-            title="System Data & Backups"
-            className="p-2 text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition-colors border border-white/20 backdrop-blur-xs shadow-xs cursor-pointer"
-            aria-label="Backup and Data Management"
-          >
-            <Database className="w-4 h-4" />
-          </button>
         </div>
       </div>
     </header>

@@ -23,7 +23,6 @@ import { MemberPortalView } from './components/MemberPortalView';
 import { MemberCardModal } from './components/MemberCardModal';
 import { MemberModal } from './components/MemberModal';
 import { RemittanceModal } from './components/RemittanceModal';
-import { DataBackupModal } from './components/DataBackupModal';
 import { YouthMember } from './types';
 
 function MainAppContent() {
@@ -35,7 +34,6 @@ function MainAppContent() {
   const [editingMember, setEditingMember] = useState<YouthMember | null>(null);
   const [cardModalMember, setCardModalMember] = useState<YouthMember | null>(null);
   const [isRemittanceModalOpen, setIsRemittanceModalOpen] = useState(false);
-  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
 
   const handleOpenNewMember = () => {
     setEditingMember(null);
@@ -58,7 +56,6 @@ function MainAppContent() {
         currentTab={currentTab}
         setCurrentTab={setCurrentTab}
         onOpenNewMemberModal={handleOpenNewMember}
-        onOpenBackupModal={() => setIsBackupModalOpen(true)}
       />
 
       {/* Main View Area */}
@@ -160,11 +157,6 @@ function MainAppContent() {
       <RemittanceModal
         isOpen={isRemittanceModalOpen}
         onClose={() => setIsRemittanceModalOpen(false)}
-      />
-
-      <DataBackupModal
-        isOpen={isBackupModalOpen}
-        onClose={() => setIsBackupModalOpen(false)}
       />
     </div>
   );
